@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.mypy_cache/
+
+# Environments
+.venv/
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local app data
+data/
+logs/
+backend_data/
+.tmp_pytest/
+paperreader-flow-*/
+paperreader-tests-*/
+pytest-cache-files-*/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.trae/
+
+# Docs
+docs
+AGENT.md
+product_spec.md
+system_architecture.md
