@@ -1,4 +1,10 @@
-import { SessionDetailResponse, SessionSummary } from "./types";
+import {
+  LiteratureSearchRecord,
+  ReferenceAsset,
+  RunResponse,
+  SessionDetailResponse,
+  SessionSummary,
+} from "./types";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -37,26 +43,51 @@ export async function uploadPapers(sessionId: string, files: File[]): Promise<Se
   return response.json();
 }
 
-export async function analyzeSession(sessionId: string, focusQuestion: string): Promise<void> {
-  await fetch(`${API_BASE}/sessions/${sessionId}/analyze`, {
+export async function createRun(sessionId: string, body: {
+  mode: "analyze" | "answer" | "archive";
+  input: string;
+  preferred_paper_ids: string[];
+}): Promise<RunResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ focus_question: focusQuestion || null })
+    body: JSON.stringify(body)
   });
+  return response.json();
 }
 
-export async function askQuestion(sessionId: string, question: string): Promise<void> {
-  await fetch(`${API_BASE}/sessions/${sessionId}/questions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, preferred_paper_ids: [] })
-  });
+export function runEventsUrl(sessionId: string, runId: string): string {
+  return `${API_BASE}/sessions/${sessionId}/runs/${runId}/events`;
 }
 
-export async function buildArchive(sessionId: string): Promise<void> {
-  await fetch(`${API_BASE}/sessions/${sessionId}/archive`, {
+export async function discoverLiterature(sessionId: string, body: {
+  query: string;
+  discovery_mode: "latest_top_venues" | "seminal" | "related";
+  domain: "general" | "cs" | "biomed";
+  max_results: number;
+  preferred_venues: string[];
+}): Promise<LiteratureSearchRecord> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/discover`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ include_qa: true })
+    body: JSON.stringify(body)
   });
+  const payload = await response.json();
+  return payload.search;
+}
+
+export async function listDiscoveries(sessionId: string): Promise<LiteratureSearchRecord[]> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/discover`);
+  const payload = await response.json();
+  return payload.searches;
+}
+
+export async function localizeDiscoveryReference(sessionId: string, searchId: string, resultId: string): Promise<ReferenceAsset> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/discover/${searchId}/localize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ result_id: resultId })
+  });
+  const payload = await response.json();
+  return payload.reference;
 }

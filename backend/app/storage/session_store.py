@@ -4,24 +4,31 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 from uuid import uuid4
 
-from backend.app.logging.session_logger import get_session_logger
-from backend.app.models.domain import (
+from backend.app.core.config import ensure_safe_session_root, is_test_mode_enabled
+from backend.app.core.models.domain import (
     AnalysisArtifact,
     ArchiveArtifact,
+    CompactSummary,
+    EvidenceLedgerEntry,
+    LibraryCard,
+    LiteratureSearchRecord,
     MemoryNote,
     PaperAsset,
     ParsedDocument,
     QARecord,
     ReferenceAsset,
+    RunEvent,
+    RunSummary,
     SessionArtifacts,
     SessionSummary,
-    TaskStatus,
 )
+from backend.app.logging.session_logger import get_session_logger
 
 
 T = TypeVar("T")
@@ -30,9 +37,13 @@ T = TypeVar("T")
 class SessionStore:
     """Persist session data to the local filesystem."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, test_mode: bool | None = None):
         self.root = root
+        self.test_mode = is_test_mode_enabled() if test_mode is None else test_mode
+        ensure_safe_session_root(self.root, test_mode=self.test_mode)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.library_root = self.root / "_library"
+        self.library_root.mkdir(parents=True, exist_ok=True)
 
     def create_session(
         self,
@@ -48,7 +59,20 @@ class SessionStore:
         created_label = now.strftime("%Y%m%d_%H%M%S")
         session_id = f"{slug}-{created_label}"
         session_dir = self.root / f"{slug}__{created_label}"
-        for child in ("uploads", "parsed", "references", "analysis", "qa", "memory", "archive", "logs"):
+        for child in (
+            "uploads",
+            "parsed",
+            "references",
+            "searches",
+            "analysis",
+            "qa",
+            "memory",
+            "memory/evidence",
+            "memory/compact",
+            "archive",
+            "logs",
+            "runs",
+        ):
             (session_dir / child).mkdir(parents=True, exist_ok=True)
 
         summary = SessionSummary(
@@ -61,13 +85,15 @@ class SessionStore:
             external_links=external_links,
             created_at=now,
             updated_at=now,
-            latest_task=None,
         )
         self._write_model(session_dir / "session.json", summary)
         self._write_json(session_dir / "papers.json", [])
         self._write_json(session_dir / "references.json", [])
+        self._write_json(session_dir / "searches" / "index.json", [])
         self._write_json(session_dir / "analysis_index.json", [])
         self._write_json(session_dir / "qa_index.json", [])
+        self._write_json(session_dir / "runs" / "index.json", [])
+        self._write_json(session_dir / "memory" / "compact" / "summaries.json", [])
         logger = get_session_logger(session_dir, slug, created_label)
         logger.info("Session created: %s", session_name)
         self.save_memory(
@@ -104,17 +130,6 @@ class SessionStore:
             if session.session_id == session_id:
                 return path
         raise FileNotFoundError(f"Session not found: {session_id}")
-
-    def append_task(self, session_id: str, task: TaskStatus) -> None:
-        session = self.get_session(session_id)
-        session.latest_task = task
-        session.updated_at = datetime.now(UTC)
-        self.update_session(session)
-        session_dir = self.session_dir(session_id)
-        task_path = session_dir / "tasks.json"
-        tasks = self._read_json(task_path, [])
-        tasks.append(task.model_dump(mode="json"))
-        self._write_json(task_path, tasks)
 
     def save_uploaded_paper(self, session_id: str, *, filename: str, media_type: str, content: bytes) -> PaperAsset:
         session_dir = self.session_dir(session_id)
@@ -180,6 +195,41 @@ class SessionStore:
         payload = self._read_json(self.session_dir(session_id) / "references.json", [])
         return [ReferenceAsset.model_validate(item) for item in payload]
 
+    def save_literature_search(self, session_id: str, search: LiteratureSearchRecord) -> LiteratureSearchRecord:
+        session_dir = self.session_dir(session_id)
+        path = session_dir / "searches" / f"{search.search_id}.json"
+        self._write_model(path, search)
+        index_path = session_dir / "searches" / "index.json"
+        index = self._read_json(index_path, [])
+        index.append(
+            {
+                "search_id": search.search_id,
+                "session_id": search.session_id,
+                "query": search.query,
+                "discovery_mode": search.discovery_mode,
+                "domain": search.domain,
+                "preferred_venues": search.preferred_venues,
+                "created_at": search.created_at.isoformat(),
+                "result_count": len(search.results),
+            }
+        )
+        self._write_json(index_path, index)
+        return search
+
+    def list_literature_searches(self, session_id: str) -> list[LiteratureSearchRecord]:
+        searches_dir = self.session_dir(session_id) / "searches"
+        return [
+            LiteratureSearchRecord.model_validate_json(path.read_text(encoding="utf-8"))
+            for path in sorted(searches_dir.glob("*.json"))
+            if path.name != "index.json"
+        ]
+
+    def get_literature_search(self, session_id: str, search_id: str) -> LiteratureSearchRecord:
+        path = self.session_dir(session_id) / "searches" / f"{search_id}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Search not found: {search_id}")
+        return LiteratureSearchRecord.model_validate_json(path.read_text(encoding="utf-8"))
+
     def save_qa_record(self, session_id: str, qa_record: QARecord) -> QARecord:
         session_dir = self.session_dir(session_id)
         index = self._read_json(session_dir / "qa_index.json", [])
@@ -205,6 +255,89 @@ class SessionStore:
             return None
         return MemoryNote.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def save_evidence_entry(self, session_id: str, entry: EvidenceLedgerEntry) -> EvidenceLedgerEntry:
+        path = self.session_dir(session_id) / "memory" / "evidence" / "ledger.jsonl"
+        self._append_jsonl(path, entry.model_dump(mode="json"))
+        return entry
+
+    def list_evidence_entries(self, session_id: str) -> list[EvidenceLedgerEntry]:
+        path = self.session_dir(session_id) / "memory" / "evidence" / "ledger.jsonl"
+        return [EvidenceLedgerEntry.model_validate(item) for item in self._read_jsonl(path)]
+
+    def save_compact_summary(self, session_id: str, summary: CompactSummary) -> CompactSummary:
+        path = self.session_dir(session_id) / "memory" / "compact" / "summaries.json"
+        payload = self._read_json(path, [])
+        payload.append(summary.model_dump(mode="json"))
+        self._write_json(path, payload)
+        return summary
+
+    def list_compact_summaries(self, session_id: str) -> list[CompactSummary]:
+        path = self.session_dir(session_id) / "memory" / "compact" / "summaries.json"
+        payload = self._read_json(path, [])
+        return [CompactSummary.model_validate(item) for item in payload]
+
+    def save_library_card(self, card: LibraryCard) -> LibraryCard:
+        path = self.library_root / "cards.json"
+        payload = self._read_json(path, [])
+        payload.append(card.model_dump(mode="json"))
+        self._write_json(path, payload)
+        return card
+
+    def list_library_cards(self, session_id: str | None = None) -> list[LibraryCard]:
+        payload = self._read_json(self.library_root / "cards.json", [])
+        cards = [LibraryCard.model_validate(item) for item in payload]
+        if session_id is None:
+            return cards
+        return [card for card in cards if card.session_id == session_id]
+
+    def create_run(self, run: RunSummary) -> RunSummary:
+        session_dir = self.session_dir(run.session_id)
+        path = session_dir / "runs" / f"{run.run_id}.json"
+        self._write_model(path, run)
+        index_path = session_dir / "runs" / "index.json"
+        index = self._read_json(index_path, [])
+        index.append(run.model_dump(mode="json"))
+        self._write_json(index_path, index)
+        return run
+
+    def update_run(self, session_id: str, run: RunSummary) -> RunSummary:
+        session_dir = self.session_dir(session_id)
+        path = session_dir / "runs" / f"{run.run_id}.json"
+        self._write_model(path, run)
+        index_path = session_dir / "runs" / "index.json"
+        index = [
+            run.model_dump(mode="json") if item.get("run_id") == run.run_id else item
+            for item in self._read_json(index_path, [])
+        ]
+        self._write_json(index_path, index)
+        return run
+
+    def get_run(self, session_id: str, run_id: str) -> RunSummary:
+        path = self.session_dir(session_id) / "runs" / f"{run_id}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Run not found: {run_id}")
+        last_error: Exception | None = None
+        for _ in range(5):
+            try:
+                return RunSummary.model_validate_json(path.read_text(encoding="utf-8"))
+            except ValueError as exc:
+                last_error = exc
+                time.sleep(0.02)
+        raise last_error or RuntimeError(f"Unable to read run: {run_id}")
+
+    def list_runs(self, session_id: str) -> list[RunSummary]:
+        payload = self._read_json(self.session_dir(session_id) / "runs" / "index.json", [])
+        return [RunSummary.model_validate(item) for item in payload]
+
+    def append_run_event(self, session_id: str, event: RunEvent) -> RunEvent:
+        path = self.session_dir(session_id) / "runs" / f"{event.run_id}.events.jsonl"
+        self._append_jsonl(path, event.model_dump(mode="json"))
+        return event
+
+    def list_run_events(self, session_id: str, run_id: str) -> list[RunEvent]:
+        path = self.session_dir(session_id) / "runs" / f"{run_id}.events.jsonl"
+        return [RunEvent.model_validate(item) for item in self._read_jsonl(path)]
+
     def save_archive(self, session_id: str, archive: ArchiveArtifact, markdown: str) -> ArchiveArtifact:
         session_dir = self.session_dir(session_id)
         md_path = session_dir / "archive" / "archive.md"
@@ -226,12 +359,17 @@ class SessionStore:
             analyses=self.list_analyses(session_id),
             qa_records=self.list_qa_records(session_id),
             memory=self.load_memory(session_id),
+            evidence_ledger=self.list_evidence_entries(session_id),
+            compact_summaries=self.list_compact_summaries(session_id),
+            library_cards=self.list_library_cards(session_id),
+            literature_searches=self.list_literature_searches(session_id),
+            runs=self.list_runs(session_id),
             archive=self.load_archive(session_id),
         )
 
     def _render_memory_markdown(self, memory: MemoryNote) -> str:
         lines = [
-            f"# Memory Note: {memory.session_id}",
+            f"# Working Memory: {memory.session_id}",
             "",
             "## Confirmed Points",
             *([f"- {item}" for item in memory.confirmed_points] or ["- None"]),
@@ -258,6 +396,23 @@ class SessionStore:
 
     def _write_json(self, path: Path, payload: list | dict) -> None:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _append_jsonl(self, path: Path, payload: dict) -> None:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False))
+            handle.write("\n")
+
+    def _read_jsonl(self, path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        items: list[dict] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                items.append(json.loads(line))
+        return items
 
     def _write_model(self, path: Path, model: object) -> None:
         if hasattr(model, "model_dump_json"):

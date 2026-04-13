@@ -6,21 +6,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.routes.sessions import router as session_router
-from backend.app.config import get_settings
+from backend.app.core.config import get_settings
 from backend.app.llm.client import LLMClient
-from backend.app.orchestrator.study_orchestrator import StudyOrchestrator
-from backend.app.parsers.document_parser import DocumentParser
-from backend.app.reports.archive_report import ArchiveReportBuilder
-from backend.app.retrieval.external_retrieval import ExternalRetriever
-from backend.app.retrieval.local_retrieval import LocalEvidenceRetriever
+from backend.app.runtime.run_engine import RunEngine
+from backend.app.services.discovery.external_retrieval import ExternalRetriever
+from backend.app.services.discovery.search_broker import SearchBroker
+from backend.app.services.parsing.document_parser import DocumentParser
+from backend.app.services.reporting.archive_report import ArchiveReportBuilder
+from backend.app.services.retrieval.local_evidence import LocalEvidenceRetriever
+from backend.app.services.verification.verifier import AnswerVerifier
 from backend.app.storage.session_store import SessionStore
-from backend.app.verification.verifier import AnswerVerifier
 
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
-    store = SessionStore(settings.session_data_root)
+    store = SessionStore(settings.session_data_root, test_mode=settings.test_mode)
     llm_client = LLMClient(
         provider=settings.llm_provider,
         mode=settings.llm_mode,
@@ -28,7 +29,11 @@ def create_app() -> FastAPI:
         model=settings.llm_model,
         base_url=settings.llm_proxy_url,
     )
-    orchestrator = StudyOrchestrator(
+    search_broker = SearchBroker(
+        openalex_email=settings.openalex_email,
+        tavily_api_key=settings.tavily_api_key,
+    )
+    run_engine = RunEngine(
         store=store,
         parser=DocumentParser(max_chars=settings.max_parse_chars),
         llm_client=llm_client,
@@ -37,6 +42,7 @@ def create_app() -> FastAPI:
             semantic_scholar_api_key=settings.semantic_scholar_api_key,
             openalex_email=settings.openalex_email,
             tavily_api_key=settings.tavily_api_key,
+            search_broker=search_broker,
         ),
         verifier=AnswerVerifier(),
         archive_builder=ArchiveReportBuilder(),
@@ -51,7 +57,8 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
     app.state.store = store
-    app.state.orchestrator = orchestrator
+    app.state.search_broker = search_broker
+    app.state.run_engine = run_engine
     app.include_router(session_router)
 
     @app.get("/healthz")

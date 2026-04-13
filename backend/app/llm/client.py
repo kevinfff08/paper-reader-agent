@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -94,6 +94,57 @@ class LLMClient:
                 time.sleep(2 ** attempt)
 
         raise last_error or RuntimeError("Unknown LLM failure")
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str = "",
+        temperature: float = 0.2,
+        max_tokens: int = 2500,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield normalized streaming chat events from an OpenAI-compatible API."""
+        if not self.is_configured:
+            raise RuntimeError("LLM client is not configured")
+
+        if self.provider == "claude":
+            text = self.generate(
+                self._messages_to_prompt(messages),
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if text:
+                yield {"type": "text_delta", "delta": text}
+            return
+
+        base_url = normalize_openai_base_url(self.base_url or _OPENAI_BASE_URL)
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload_messages: list[dict[str, Any]] = []
+        if system:
+            payload_messages.append({"role": "system", "content": system})
+        payload_messages.extend(messages)
+
+        with httpx.Client(timeout=self.timeout_seconds, headers=headers, base_url=base_url.rstrip("/") + "/") as client:
+            with client.stream(
+                "POST",
+                "chat/completions",
+                json={
+                    "model": self.resolved_model,
+                    "messages": payload_messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "stream": True,
+                },
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    event = self._parse_stream_line(line)
+                    if event is not None:
+                        yield event
 
     def _generate_openai(
         self,
@@ -196,3 +247,50 @@ class LLMClient:
             max_tokens=max_tokens,
         )
         return json.loads(response)
+
+    @staticmethod
+    def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:
+        """Collapse chat messages into a plain prompt for non-streaming fallbacks."""
+        parts: list[str] = []
+        for message in messages:
+            role = str(message.get("role", "user")).upper()
+            content = LLMClient._extract_openai_text(message.get("content"))
+            if content:
+                parts.append(f"{role}:\n{content}")
+        return "\n\n".join(parts).strip()
+
+    @classmethod
+    def _parse_stream_line(cls, line: str) -> dict[str, Any] | None:
+        """Parse one OpenAI-compatible SSE line into a normalized event."""
+        stripped = line.strip()
+        if not stripped or stripped.startswith(":"):
+            return None
+        if stripped.startswith("data:"):
+            stripped = stripped[5:].strip()
+        if stripped == "[DONE]":
+            return None
+
+        payload = json.loads(stripped)
+        choices = payload.get("choices", [])
+        if not choices:
+            return None
+
+        delta = choices[0].get("delta", {})
+        content = delta.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = "".join(
+                str(item.get("text", ""))
+                for item in content
+                if isinstance(item, dict)
+            )
+        else:
+            text = ""
+        if text:
+            return {"type": "text_delta", "delta": text}
+
+        tool_calls = delta.get("tool_calls")
+        if tool_calls:
+            return {"type": "tool_call_delta", "tool_calls": tool_calls}
+        return None

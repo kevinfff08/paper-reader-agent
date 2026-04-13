@@ -1,1 +1,0 @@
-"""Session orchestration for PaperReader."""

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from backend.app.models.domain import (
+from backend.app.core.models.domain import (
     AnalysisArtifact,
     ArchiveArtifact,
+    DiscoveredPaper,
+    LiteratureSearchRecord,
     QARecord,
+    ReferenceAsset,
+    RunSummary,
     SessionArtifacts,
     SessionSummary,
 )
@@ -42,6 +46,30 @@ class ArchiveSessionRequest(BaseModel):
     include_qa: bool = True
 
 
+class CreateRunRequest(BaseModel):
+    """Request payload to create an agent run."""
+
+    mode: str = Field(pattern="^(analyze|answer|archive)$")
+    input: str = Field(default="")
+    preferred_paper_ids: list[str] = Field(default_factory=list)
+
+
+class DiscoverLiteratureRequest(BaseModel):
+    """Request payload for synchronous literature discovery."""
+
+    query: str = Field(min_length=1)
+    discovery_mode: str = Field(pattern="^(latest_top_venues|seminal|related)$")
+    domain: str = Field(pattern="^(general|cs|biomed)$", default="general")
+    max_results: int = Field(default=10, ge=1, le=20)
+    preferred_venues: list[str] = Field(default_factory=list)
+
+
+class LocalizeDiscoveryReferenceRequest(BaseModel):
+    """Request payload to save one discovered paper as a session reference."""
+
+    result_id: str = Field(min_length=1)
+
+
 class SessionListResponse(BaseModel):
     """Response payload for session listing."""
 
@@ -71,3 +99,27 @@ class ArchiveResponse(BaseModel):
     """Response payload for archive generation."""
 
     archive: ArchiveArtifact
+
+
+class RunResponse(BaseModel):
+    """Response payload for a run."""
+
+    run: RunSummary
+
+
+class DiscoverLiteratureResponse(BaseModel):
+    """Response payload for one literature discovery execution."""
+
+    search: LiteratureSearchRecord
+
+
+class LiteratureSearchListResponse(BaseModel):
+    """Response payload for search history."""
+
+    searches: list[LiteratureSearchRecord]
+
+
+class ReferenceResponse(BaseModel):
+    """Response payload for one localized reference."""
+
+    reference: ReferenceAsset

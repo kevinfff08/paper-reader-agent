@@ -18,6 +18,8 @@ data/
 logs/
 backend_data/
 .tmp_pytest/
+.tmp-tests/
+sandbox-write-check/
 paperreader-flow-*/
 paperreader-tests-*/
 pytest-cache-files-*/

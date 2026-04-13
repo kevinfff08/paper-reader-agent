@@ -1,4 +1,5 @@
 @echo off
 setlocal
 conda activate research_tools
-pytest tests -v
+set PAPERREADER_TEST_MODE=1
+pytest tests -v -p no:cacheprovider

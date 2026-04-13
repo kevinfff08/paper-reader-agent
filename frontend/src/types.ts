@@ -1,12 +1,3 @@
-export type TaskStatus = {
-  task_id: string;
-  phase: string;
-  state: string;
-  message: string;
-  created_at: string;
-  updated_at: string;
-};
-
 export type SessionSummary = {
   session_id: string;
   session_name: string;
@@ -17,7 +8,6 @@ export type SessionSummary = {
   external_links: string[];
   created_at: string;
   updated_at: string;
-  latest_task?: TaskStatus | null;
 };
 
 export type PaperAsset = {
@@ -43,9 +33,15 @@ export type AnalysisArtifact = {
 };
 
 export type EvidenceRef = {
+  source_type?: "paper" | "analysis" | "reference";
+  asset_id?: string;
   label: string;
   excerpt: string;
   locator?: string | null;
+  source_kind?: string | null;
+  source_url?: string | null;
+  page_label?: string | null;
+  score?: number | null;
 };
 
 export type ReferenceAsset = {
@@ -54,6 +50,20 @@ export type ReferenceAsset = {
   source_kind: string;
   source_url: string;
   summary: string;
+  localized_path?: string | null;
+  doi?: string | null;
+  authors?: string[];
+  year?: number | null;
+  venue?: string | null;
+  citation_count?: number | null;
+  landing_page_url?: string | null;
+  pdf_url?: string | null;
+  best_access_url?: string | null;
+  manual_search_url?: string | null;
+  oa_status?: string;
+  acquisition_status?: string;
+  search_reason?: string | null;
+  is_supplementary?: boolean;
 };
 
 export type QARecord = {
@@ -62,21 +72,93 @@ export type QARecord = {
   answer_text: string;
   evidence_refs: EvidenceRef[];
   retrieval_refs: ReferenceAsset[];
-  verification_status: string;
+  verification_status:
+    | "not_needed"
+    | "verified_uploaded_paper"
+    | "verified_session_local"
+    | "supplemented_external"
+    | "links_only"
+    | "unverified";
   created_at: string;
 };
 
 export type MemoryNote = {
+  session_id?: string;
+  path?: string;
   confirmed_points: string[];
   unresolved_points: string[];
   tracked_questions: string[];
   paper_titles: string[];
   reference_titles: string[];
+  updated_at?: string;
 };
 
 export type ArchiveArtifact = {
   archive_id: string;
+  session_id?: string;
   markdown_path: string;
+  created_at: string;
+};
+
+export type EvidenceLedgerEntry = {
+  evidence_id: string;
+  session_id: string;
+  run_id?: string | null;
+  source_type: "paper" | "analysis" | "reference";
+  asset_id: string;
+  label: string;
+  excerpt: string;
+  locator?: string | null;
+  recorded_at: string;
+};
+
+export type CompactSummary = {
+  summary_id: string;
+  session_id: string;
+  boundary_label: string;
+  content: string;
+  created_at: string;
+};
+
+export type LibraryCard = {
+  card_id: string;
+  session_id: string;
+  card_type: "paper" | "concept" | "session";
+  title: string;
+  content: string;
+  linked_asset_ids: string[];
+  created_at: string;
+};
+
+export type RunSummary = {
+  run_id: string;
+  session_id: string;
+  mode: "analyze" | "answer" | "archive";
+  status: "pending" | "running" | "completed" | "failed";
+  input_text: string;
+  preferred_paper_ids: string[];
+  risk_level?: "low" | "medium" | "high" | null;
+  final_artifact_ref?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RunEvent = {
+  event_id: string;
+  run_id: string;
+  sequence_number: number;
+  event_type:
+    | "run_started"
+    | "assistant_delta"
+    | "tool_call_started"
+    | "tool_call_finished"
+    | "evidence_added"
+    | "verification_required"
+    | "memory_updated"
+    | "run_completed"
+    | "run_failed";
+  payload: Record<string, unknown>;
   created_at: string;
 };
 
@@ -86,10 +168,51 @@ export type SessionArtifacts = {
   analyses: AnalysisArtifact[];
   qa_records: QARecord[];
   memory?: MemoryNote | null;
+  evidence_ledger: EvidenceLedgerEntry[];
+  compact_summaries: CompactSummary[];
+  library_cards: LibraryCard[];
+  literature_searches: LiteratureSearchRecord[];
+  runs: RunSummary[];
   archive?: ArchiveArtifact | null;
 };
 
 export type SessionDetailResponse = {
   session: SessionSummary;
   artifacts: SessionArtifacts;
+};
+
+export type RunResponse = {
+  run: RunSummary;
+};
+
+export type DiscoveredPaper = {
+  result_id: string;
+  title: string;
+  authors: string[];
+  year?: number | null;
+  venue?: string | null;
+  source_kind: string;
+  source_url: string;
+  doi?: string | null;
+  citation_count?: number | null;
+  summary: string;
+  landing_page_url?: string | null;
+  pdf_url?: string | null;
+  best_access_url?: string | null;
+  manual_search_url?: string | null;
+  oa_status?: string;
+  acquisition_status?: string;
+  search_reason?: string | null;
+  is_supplementary?: boolean;
+};
+
+export type LiteratureSearchRecord = {
+  search_id: string;
+  session_id: string;
+  query: string;
+  discovery_mode: "latest_top_venues" | "seminal" | "related" | "supporting_context";
+  domain: "general" | "cs" | "biomed";
+  preferred_venues: string[];
+  results: DiscoveredPaper[];
+  created_at: string;
 };

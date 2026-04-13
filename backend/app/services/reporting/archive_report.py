@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from backend.app.models.domain import AnalysisArtifact, MemoryNote, QARecord, ReferenceAsset, SessionSummary
+from backend.app.core.models.domain import (
+    AnalysisArtifact,
+    CompactSummary,
+    LibraryCard,
+    MemoryNote,
+    QARecord,
+    ReferenceAsset,
+    SessionSummary,
+)
 
 
 class ArchiveReportBuilder:
@@ -16,8 +24,12 @@ class ArchiveReportBuilder:
         qa_records: list[QARecord],
         references: list[ReferenceAsset],
         memory_note: MemoryNote | None,
+        compact_summaries: list[CompactSummary] | None = None,
+        library_cards: list[LibraryCard] | None = None,
     ) -> str:
         """Return Markdown archive content."""
+        compact_summaries = compact_summaries or []
+        library_cards = library_cards or []
         lines = [
             f"# Session Archive: {session.session_name}",
             "",
@@ -72,6 +84,24 @@ class ArchiveReportBuilder:
             lines.extend([f"- {item}" for item in memory_note.unresolved_points] or ["- None"])
             lines.append("### Tracked Questions")
             lines.extend([f"- {item}" for item in memory_note.tracked_questions] or ["- None"])
+
+        lines.extend(["", "## Compact Summaries"])
+        if not compact_summaries:
+            lines.append("No compact summaries available.")
+        for summary in compact_summaries:
+            lines.append(f"### {summary.boundary_label}")
+            lines.append(summary.content)
+            lines.append("")
+
+        lines.extend(["## Library Cards"])
+        if not library_cards:
+            lines.append("No library cards available.")
+        for card in library_cards:
+            lines.append(f"### {card.title} ({card.card_type})")
+            lines.append(card.content)
+            if card.linked_asset_ids:
+                lines.append(f"- Linked assets: {', '.join(card.linked_asset_ids)}")
+            lines.append("")
 
         lines.extend(["", "## Reference List"])
         for reference in references:

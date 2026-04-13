@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backend.app.models.domain import ParsedDocument, ParsedSection
+from backend.app.core.models.domain import ParsedChunk, ParsedDocument, ParsedSection
 
 
 class DocumentParser:
@@ -23,12 +23,14 @@ class DocumentParser:
         sections = self._split_sections(text)
         if not sections:
             sections = [ParsedSection(heading="Document Body", content=text[:4000], page_label=None)]
+        chunks = self._build_chunks(sections)
         return ParsedDocument(
             paper_id=paper_id,
             source_path=str(file_path),
             title=title,
             abstract=abstract,
             sections=sections,
+            chunks=chunks,
             plain_text=text,
             created_at=datetime.now(UTC),
         )
@@ -91,3 +93,29 @@ class DocumentParser:
             content = text[start:end].strip()
             sections.append(ParsedSection(heading=heading, content=content[:5000], page_label=None))
         return sections
+
+    def _build_chunks(self, sections: list[ParsedSection], chunk_size: int = 1200) -> list[ParsedChunk]:
+        chunks: list[ParsedChunk] = []
+        for section_index, section in enumerate(sections):
+            remaining = section.content.strip()
+            chunk_index = 0
+            while remaining:
+                if len(remaining) <= chunk_size:
+                    chunk_text = remaining
+                    remaining = ""
+                else:
+                    split_at = remaining.rfind(" ", 0, chunk_size)
+                    if split_at <= 0:
+                        split_at = chunk_size
+                    chunk_text = remaining[:split_at].strip()
+                    remaining = remaining[split_at:].lstrip()
+                chunks.append(
+                    ParsedChunk(
+                        chunk_id=f"{section_index + 1}-{chunk_index + 1}",
+                        heading=section.heading,
+                        content=chunk_text,
+                        page_label=section.page_label,
+                    )
+                )
+                chunk_index += 1
+        return chunks
