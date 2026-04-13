@@ -26,9 +26,13 @@ from backend.app.core.models.domain import (
     RunMode,
     RunSummary,
     SessionSummary,
+    TaskSummary,
+    VerificationNote,
+    WorkingStateSnapshot,
 )
 from backend.app.llm.client import LLMClient
 from backend.app.logging.session_logger import get_app_logger
+from backend.app.runtime.task_engine import TaskEngine
 from backend.app.services.discovery.external_retrieval import ExternalRetriever
 from backend.app.services.parsing.document_parser import DocumentParser
 from backend.app.services.reporting.archive_report import ArchiveReportBuilder
@@ -54,6 +58,7 @@ class RunEngine:
         external_retriever: ExternalRetriever,
         verifier: AnswerVerifier,
         archive_builder: ArchiveReportBuilder,
+        task_engine: TaskEngine | None = None,
     ):
         self.store = store
         self.parser = parser
@@ -62,6 +67,7 @@ class RunEngine:
         self.external_retriever = external_retriever
         self.verifier = verifier
         self.archive_builder = archive_builder
+        self.task_engine = task_engine
 
     def start_run(
         self,
@@ -116,6 +122,7 @@ class RunEngine:
         preferred_paper_ids: list[str] | None = None,
     ) -> RunSummary:
         now = datetime.now(UTC)
+        working_state_version = self.store.bump_working_state_version(session_id)
         run = RunSummary(
             run_id=uuid4().hex[:12],
             session_id=session_id,
@@ -123,6 +130,8 @@ class RunEngine:
             status="pending",
             input_text=input_text,
             preferred_paper_ids=preferred_paper_ids or [],
+            working_state_version=working_state_version,
+            verification_state="not_requested",
             created_at=now,
             updated_at=now,
         )
@@ -165,13 +174,38 @@ class RunEngine:
         summary_text = "\n\n".join(section.content for section in synthesis.sections[:2])
         sequence_number = self._emit_text(run, sequence_number, summary_text)
         sequence_number = self._emit(run, sequence_number, "memory_updated", {"layer": "working_memory"})
+        if self.task_engine is not None:
+            snapshot = self._build_working_snapshot(
+                session,
+                run,
+                active_question=run.input_text or "Initial analysis",
+                unresolved_items=[],
+                evidence=[],
+                preserved_tail=[section.content[:160] for section in synthesis.sections[:2]],
+            )
+            memory_task = self.task_engine.start_task(
+                run.session_id,
+                agent_kind="session_memory_update",
+                input_text=run.input_text or "Initial analysis",
+                parent_run_id=run.run_id,
+                snapshot=snapshot,
+            )
+            extraction_task = self.task_engine.start_task(
+                run.session_id,
+                agent_kind="memory_extraction",
+                input_text=run.input_text or "Initial analysis",
+                parent_run_id=run.run_id,
+                snapshot=snapshot,
+            )
+            run = self._attach_task_to_run(run, memory_task.task_id, extraction_task.task_id)
         return f"analysis:{synthesis.analysis_id}", sequence_number
 
     def _execute_answer(self, run: RunSummary, sequence_number: int) -> tuple[str, int]:
         session = self.store.get_session(run.session_id)
         question = run.input_text.strip()
         risk_level = self._classify_risk(question)
-        run = self._update_run(run, risk_level=risk_level)
+        verification_state = "pending" if risk_level == "high" else "not_requested"
+        run = self._update_run(run, risk_level=risk_level, verification_state=verification_state)
         parsed_docs = self.store.load_parsed_documents(run.session_id)
         if not parsed_docs and self.store.list_papers(run.session_id):
             parsed_docs, sequence_number = self._parse_all_papers(run, sequence_number)
@@ -192,6 +226,25 @@ class RunEngine:
         }
 
         sequence_number = self._emit(run, sequence_number, "verification_required", {"risk_level": risk_level})
+        compact_task: TaskSummary | None = None
+        compact_merged = False
+        if self.task_engine is not None:
+            compact_snapshot = self._build_working_snapshot(
+                session,
+                run,
+                active_question=question,
+                unresolved_items=[question],
+                evidence=[],
+                preserved_tail=["question_received", question],
+            )
+            compact_task = self.task_engine.start_task(
+                run.session_id,
+                agent_kind="compact",
+                input_text=question,
+                parent_run_id=run.run_id,
+                snapshot=compact_snapshot,
+            )
+            run = self._attach_task_to_run(run, compact_task.task_id)
 
         for _ in range(6):
             action = self._decide_next_action(
@@ -274,6 +327,13 @@ class RunEngine:
             if action == "search_external_sources":
                 state["external_used"] = True
             sequence_number = self._emit(run, sequence_number, "tool_call_finished", {"tool": action})
+            if compact_task is not None and not compact_merged:
+                compact_merged, sequence_number = self._maybe_merge_compact_candidate(
+                    run,
+                    compact_task.task_id,
+                    compact_merged,
+                    sequence_number,
+                )
 
         combined_evidence = self._combined_evidence(state)
         localized_refs: list[ReferenceAsset] = state["localized_refs"]  # type: ignore[assignment]
@@ -281,6 +341,36 @@ class RunEngine:
             raise RuntimeError("Unable to satisfy high-risk evidence gate with uploaded-paper evidence")
 
         answer_text = self._draft_answer(question, combined_evidence, localized_refs)
+        if risk_level == "high" and self.task_engine is not None:
+            verification_snapshot = self._build_working_snapshot(
+                session,
+                run,
+                active_question=question,
+                unresolved_items=[],
+                evidence=combined_evidence,
+                preserved_tail=[question, answer_text[:240]],
+            )
+            verification_task = self.task_engine.start_task(
+                run.session_id,
+                agent_kind="verification",
+                input_text=question,
+                parent_run_id=run.run_id,
+                snapshot=verification_snapshot,
+            )
+            run = self._attach_task_to_run(run, verification_task.task_id)
+            verified = self.task_engine.wait_for_task(run.session_id, verification_task.task_id, timeout_seconds=10.0)
+            verification_result = str(verified.result_payload.get("verification_status", "failed"))
+            if verified.status != "completed" or verification_result != "passed":
+                run = self._update_run(run, verification_state="failed")
+                sequence_number = self._emit(
+                    run,
+                    sequence_number,
+                    "verification_required",
+                    {"reason": verified.result_payload.get("verification_rationale", "Verification task failed")},
+                )
+                raise RuntimeError("High-risk verification did not pass")
+            run = self._update_run(run, verification_state="passed")
+
         sequence_number = self._emit_text(run, sequence_number, answer_text)
         verification_status = self.verifier.verify(
             evidence_refs=combined_evidence,
@@ -300,6 +390,30 @@ class RunEngine:
             self._update_memory_from_question(session, question, localized_refs, combined_evidence)
             self._append_compact_summary(run.session_id, f"qa:{qa_record.question_id}", answer_text[:1200])
             sequence_number = self._emit(run, sequence_number, "memory_updated", {"layer": "working_memory"})
+        if self.task_engine is not None:
+            post_snapshot = self._build_working_snapshot(
+                session,
+                run,
+                active_question=question,
+                unresolved_items=[],
+                evidence=combined_evidence,
+                preserved_tail=[question, answer_text[:240]],
+            )
+            memory_task = self.task_engine.start_task(
+                run.session_id,
+                agent_kind="session_memory_update",
+                input_text=question,
+                parent_run_id=run.run_id,
+                snapshot=post_snapshot,
+            )
+            extraction_task = self.task_engine.start_task(
+                run.session_id,
+                agent_kind="memory_extraction",
+                input_text=question,
+                parent_run_id=run.run_id,
+                snapshot=post_snapshot,
+            )
+            run = self._attach_task_to_run(run, memory_task.task_id, extraction_task.task_id)
         return f"qa:{qa_record.question_id}", sequence_number
 
     def _execute_archive(self, run: RunSummary, sequence_number: int) -> tuple[str, int]:
@@ -480,6 +594,93 @@ class RunEngine:
         if not state["memory_updated"]:
             return "update_session_memory"
         return "finish"
+
+    def _attach_task_to_run(self, run: RunSummary, *task_ids: str) -> RunSummary:
+        merged_ids = list(dict.fromkeys([*run.active_background_task_ids, *task_ids]))
+        return self._update_run(run, active_background_task_ids=merged_ids)
+
+    def _build_working_snapshot(
+        self,
+        session: SessionSummary,
+        run: RunSummary,
+        *,
+        active_question: str | None,
+        unresolved_items: list[str],
+        evidence: list[EvidenceRef],
+        preserved_tail: list[str],
+    ) -> WorkingStateSnapshot:
+        recent_files = [item.path for item in self.store.list_session_files(session.session_id)[:8]]
+        snapshot = WorkingStateSnapshot(
+            snapshot_id=uuid4().hex[:12],
+            session_id=session.session_id,
+            run_id=run.run_id,
+            version=run.working_state_version,
+            transcript_cursor=len(self.store.list_run_events(session.session_id, run.run_id)),
+            active_question=active_question,
+            unresolved_items=unresolved_items[:8],
+            active_plan=[f"Mode: {run.mode}", f"Session: {session.session_name}"],
+            recent_evidence_refs=evidence[:8],
+            recent_file_paths=recent_files,
+            preserved_tail=preserved_tail[:8],
+            created_at=datetime.now(UTC),
+        )
+        self.store.save_working_snapshot(session.session_id, snapshot)
+        return snapshot
+
+    def _maybe_merge_compact_candidate(
+        self,
+        run: RunSummary,
+        task_id: str,
+        already_merged: bool,
+        sequence_number: int,
+    ) -> tuple[bool, int]:
+        if already_merged:
+            return True, sequence_number
+        try:
+            task = self.store.get_task(run.session_id, task_id)
+        except FileNotFoundError:
+            return False, sequence_number
+        if task.status not in {"completed", "failed", "cancelled"}:
+            return False, sequence_number
+        if task.status != "completed":
+            return False, sequence_number
+        if task.result_payload.get("merge_status") != "candidate":
+            return task.result_payload.get("merge_status") == "merged", sequence_number
+        if task.snapshot_version != run.working_state_version:
+            updated = task.model_copy(
+                update={
+                    "result_payload": {**task.result_payload, "merge_status": "stale_candidate"},
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            self.store.update_task(run.session_id, updated)
+            return False, sequence_number
+        summary = CompactSummary(
+            summary_id=uuid4().hex[:12],
+            session_id=run.session_id,
+            boundary_label=f"run:{run.run_id}",
+            content=str(task.result_payload.get("candidate_summary", "")),
+            boundary_id=str(task.result_payload.get("boundary_id", "")),
+            snapshot_version=task.snapshot_version,
+            preserved_tail_anchor=task.result_payload.get("preserved_tail_anchor"),
+            restored_context_refs=list(task.result_payload.get("restored_context_refs", [])),
+            created_at=datetime.now(UTC),
+        )
+        self.store.save_compact_summary(run.session_id, summary)
+        updated = task.model_copy(
+            update={
+                "result_payload": {**task.result_payload, "merge_status": "merged"},
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.store.update_task(run.session_id, updated)
+        sequence_number = self._emit(
+            run,
+            sequence_number,
+            "memory_updated",
+            {"layer": "compact_memory", "boundary_id": summary.boundary_id, "snapshot_version": summary.snapshot_version},
+        )
+        return True, sequence_number
 
     def _update_run(self, run: RunSummary, **changes) -> RunSummary:
         updated = run.model_copy(update={"updated_at": datetime.now(UTC), **changes})
@@ -748,6 +949,9 @@ class RunEngine:
                 session_id=session_id,
                 boundary_label=boundary_label,
                 content=content,
+                boundary_id=uuid4().hex[:12],
+                snapshot_version=self.store.load_working_state_version(session_id),
+                preserved_tail_anchor=boundary_label,
                 created_at=datetime.now(UTC),
             ),
         )

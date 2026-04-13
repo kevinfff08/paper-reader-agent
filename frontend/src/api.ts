@@ -4,6 +4,8 @@ import {
   RunResponse,
   SessionDetailResponse,
   SessionSummary,
+  TaskResponse,
+  TaskSummary,
 } from "./types";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -58,6 +60,37 @@ export async function createRun(sessionId: string, body: {
 
 export function runEventsUrl(sessionId: string, runId: string): string {
   return `${API_BASE}/sessions/${sessionId}/runs/${runId}/events`;
+}
+
+export async function listTasks(sessionId: string): Promise<TaskSummary[]> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tasks`);
+  const payload = await response.json();
+  return payload.tasks;
+}
+
+export async function createTask(sessionId: string, body: {
+  agent_kind: "compact" | "session_memory_update" | "memory_extraction" | "verification";
+  input?: string;
+  parent_run_id?: string | null;
+  snapshot_version?: number | null;
+}): Promise<TaskResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return response.json();
+}
+
+export function taskEventsUrl(sessionId: string, taskId: string): string {
+  return `${API_BASE}/sessions/${sessionId}/tasks/${taskId}/events`;
+}
+
+export async function stopTask(sessionId: string, taskId: string): Promise<TaskResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tasks/${taskId}/stop`, {
+    method: "POST",
+  });
+  return response.json();
 }
 
 export async function discoverLiterature(sessionId: string, body: {

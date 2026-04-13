@@ -19,6 +19,7 @@ VerificationStatus = Literal[
 RunMode = Literal["analyze", "answer", "archive"]
 RunStateValue = Literal["pending", "running", "completed", "failed"]
 RiskLevel = Literal["low", "medium", "high"]
+VerificationState = Literal["not_requested", "pending", "passed", "failed"]
 RunEventType = Literal[
     "run_started",
     "assistant_delta",
@@ -29,6 +30,17 @@ RunEventType = Literal[
     "memory_updated",
     "run_completed",
     "run_failed",
+]
+TaskAgentKind = Literal["compact", "session_memory_update", "memory_extraction", "verification"]
+TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+TaskEventType = Literal[
+    "task_started",
+    "task_progress",
+    "task_log",
+    "task_output",
+    "task_completed",
+    "task_failed",
+    "task_cancelled",
 ]
 DiscoveryMode = Literal["latest_top_venues", "seminal", "related", "supporting_context"]
 DiscoveryDomain = Literal["general", "cs", "biomed"]
@@ -253,6 +265,10 @@ class CompactSummary(BaseModel):
     session_id: str
     boundary_label: str
     content: str
+    boundary_id: str | None = None
+    snapshot_version: int | None = None
+    preserved_tail_anchor: str | None = None
+    restored_context_refs: list[str] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -277,6 +293,36 @@ class ArchiveArtifact(BaseModel):
     created_at: datetime
 
 
+class VerificationNote(BaseModel):
+    """Short-lived verification memory for high-risk question handling."""
+
+    verification_id: str
+    session_id: str
+    run_id: str | None = None
+    question_text: str
+    status: VerificationState
+    rationale: str
+    evidence_labels: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class WorkingStateSnapshot(BaseModel):
+    """Frozen working-state view consumed by background agents."""
+
+    snapshot_id: str
+    session_id: str
+    run_id: str | None = None
+    version: int
+    transcript_cursor: int
+    active_question: str | None = None
+    unresolved_items: list[str] = Field(default_factory=list)
+    active_plan: list[str] = Field(default_factory=list)
+    recent_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    recent_file_paths: list[str] = Field(default_factory=list)
+    preserved_tail: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
 class RunSummary(BaseModel):
     """A persisted agent runtime execution."""
 
@@ -287,6 +333,9 @@ class RunSummary(BaseModel):
     input_text: str
     preferred_paper_ids: list[str] = Field(default_factory=list)
     risk_level: RiskLevel | None = None
+    working_state_version: int = 0
+    active_background_task_ids: list[str] = Field(default_factory=list)
+    verification_state: VerificationState | None = None
     final_artifact_ref: str | None = None
     error_message: str | None = None
     created_at: datetime
@@ -304,6 +353,54 @@ class RunEvent(BaseModel):
     created_at: datetime
 
 
+class TaskSummary(BaseModel):
+    """A persisted specialized-agent task."""
+
+    task_id: str
+    session_id: str
+    agent_kind: TaskAgentKind
+    status: TaskStatus
+    parent_run_id: str | None = None
+    input_text: str = ""
+    snapshot_version: int | None = None
+    progress: int = 0
+    current_step: str | None = None
+    output_preview: str | None = None
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskEvent(BaseModel):
+    """One event emitted by the background task engine."""
+
+    event_id: str
+    task_id: str
+    sequence_number: int
+    event_type: TaskEventType
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class SessionFileEntry(BaseModel):
+    """One file or generated artifact exposed in the session file manager."""
+
+    file_id: str
+    label: str
+    path: str
+    category: Literal[
+        "paper",
+        "parsed",
+        "reference",
+        "analysis",
+        "archive",
+        "memory",
+        "task",
+    ]
+    updated_at: datetime | None = None
+
+
 class SessionArtifacts(BaseModel):
     """Convenience view of assets produced for a session."""
 
@@ -315,6 +412,9 @@ class SessionArtifacts(BaseModel):
     evidence_ledger: list[EvidenceLedgerEntry] = Field(default_factory=list)
     compact_summaries: list[CompactSummary] = Field(default_factory=list)
     library_cards: list[LibraryCard] = Field(default_factory=list)
+    verification_memory: list[VerificationNote] = Field(default_factory=list)
     literature_searches: list[LiteratureSearchRecord] = Field(default_factory=list)
     runs: list[RunSummary] = Field(default_factory=list)
+    tasks: list[TaskSummary] = Field(default_factory=list)
+    session_files: list[SessionFileEntry] = Field(default_factory=list)
     archive: ArchiveArtifact | None = None

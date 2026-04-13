@@ -14,6 +14,7 @@ from backend.app.core.models.domain import (
     RunSummary,
     SessionArtifacts,
     SessionSummary,
+    TaskSummary,
 )
 
 
@@ -52,6 +53,15 @@ class CreateRunRequest(BaseModel):
     mode: str = Field(pattern="^(analyze|answer|archive)$")
     input: str = Field(default="")
     preferred_paper_ids: list[str] = Field(default_factory=list)
+
+
+class CreateTaskRequest(BaseModel):
+    """Request payload to manually create a background specialized-agent task."""
+
+    agent_kind: str = Field(pattern="^(compact|session_memory_update|memory_extraction|verification)$")
+    input: str = Field(default="")
+    parent_run_id: str | None = None
+    snapshot_version: int | None = None
 
 
 class DiscoverLiteratureRequest(BaseModel):
@@ -105,6 +115,18 @@ class RunResponse(BaseModel):
     """Response payload for a run."""
 
     run: RunSummary
+
+
+class TaskResponse(BaseModel):
+    """Response payload for a background task."""
+
+    task: TaskSummary
+
+
+class TaskListResponse(BaseModel):
+    """Response payload for task history."""
+
+    tasks: list[TaskSummary]
 
 
 class DiscoverLiteratureResponse(BaseModel):

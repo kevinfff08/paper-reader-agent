@@ -117,6 +117,10 @@ export type CompactSummary = {
   session_id: string;
   boundary_label: string;
   content: string;
+  boundary_id?: string | null;
+  snapshot_version?: number | null;
+  preserved_tail_anchor?: string | null;
+  restored_context_refs: string[];
   created_at: string;
 };
 
@@ -138,6 +142,9 @@ export type RunSummary = {
   input_text: string;
   preferred_paper_ids: string[];
   risk_level?: "low" | "medium" | "high" | null;
+  working_state_version: number;
+  active_background_task_ids: string[];
+  verification_state?: "not_requested" | "pending" | "passed" | "failed" | null;
   final_artifact_ref?: string | null;
   error_message?: string | null;
   created_at: string;
@@ -162,6 +169,58 @@ export type RunEvent = {
   created_at: string;
 };
 
+export type TaskSummary = {
+  task_id: string;
+  session_id: string;
+  agent_kind: "compact" | "session_memory_update" | "memory_extraction" | "verification";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  parent_run_id?: string | null;
+  input_text: string;
+  snapshot_version?: number | null;
+  progress: number;
+  current_step?: string | null;
+  output_preview?: string | null;
+  result_payload: Record<string, unknown>;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskEvent = {
+  event_id: string;
+  task_id: string;
+  sequence_number: number;
+  event_type:
+    | "task_started"
+    | "task_progress"
+    | "task_log"
+    | "task_output"
+    | "task_completed"
+    | "task_failed"
+    | "task_cancelled";
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type VerificationNote = {
+  verification_id: string;
+  session_id: string;
+  run_id?: string | null;
+  question_text: string;
+  status: "not_requested" | "pending" | "passed" | "failed";
+  rationale: string;
+  evidence_labels: string[];
+  created_at: string;
+};
+
+export type SessionFileEntry = {
+  file_id: string;
+  label: string;
+  path: string;
+  category: "paper" | "parsed" | "reference" | "analysis" | "archive" | "memory" | "task";
+  updated_at?: string | null;
+};
+
 export type SessionArtifacts = {
   papers: PaperAsset[];
   references: ReferenceAsset[];
@@ -171,8 +230,11 @@ export type SessionArtifacts = {
   evidence_ledger: EvidenceLedgerEntry[];
   compact_summaries: CompactSummary[];
   library_cards: LibraryCard[];
+  verification_memory: VerificationNote[];
   literature_searches: LiteratureSearchRecord[];
   runs: RunSummary[];
+  tasks: TaskSummary[];
+  session_files: SessionFileEntry[];
   archive?: ArchiveArtifact | null;
 };
 
@@ -183,6 +245,10 @@ export type SessionDetailResponse = {
 
 export type RunResponse = {
   run: RunSummary;
+};
+
+export type TaskResponse = {
+  task: TaskSummary;
 };
 
 export type DiscoveredPaper = {

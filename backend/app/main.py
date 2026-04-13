@@ -9,6 +9,7 @@ from backend.app.api.routes.sessions import router as session_router
 from backend.app.core.config import get_settings
 from backend.app.llm.client import LLMClient
 from backend.app.runtime.run_engine import RunEngine
+from backend.app.runtime.task_engine import TaskEngine
 from backend.app.services.discovery.external_retrieval import ExternalRetriever
 from backend.app.services.discovery.search_broker import SearchBroker
 from backend.app.services.parsing.document_parser import DocumentParser
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
         tavily_api_key=settings.tavily_api_key,
     )
     run_engine = RunEngine(
+        task_engine=TaskEngine(store=store, llm_client=llm_client, verifier=AnswerVerifier()),
         store=store,
         parser=DocumentParser(max_chars=settings.max_parse_chars),
         llm_client=llm_client,
@@ -59,6 +61,7 @@ def create_app() -> FastAPI:
     app.state.store = store
     app.state.search_broker = search_broker
     app.state.run_engine = run_engine
+    app.state.task_engine = run_engine.task_engine
     app.include_router(session_router)
 
     @app.get("/healthz")

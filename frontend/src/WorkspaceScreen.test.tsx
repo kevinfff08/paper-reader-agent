@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import WorkspaceScreen from "./WorkspaceScreen";
 import * as api from "./api";
-import type { RunEvent, SessionDetailResponse, SessionSummary } from "./types";
+import type { RunEvent, SessionDetailResponse, SessionSummary, TaskEvent } from "./types";
 
 
 vi.mock("./api", async () => {
@@ -16,6 +16,8 @@ vi.mock("./api", async () => {
     uploadPapers: vi.fn(),
     createRun: vi.fn(),
     runEventsUrl: vi.fn(),
+    stopTask: vi.fn(),
+    taskEventsUrl: vi.fn(),
   };
 });
 
@@ -33,7 +35,7 @@ class MockEventSource {
     MockEventSource.instances.push(this);
   }
 
-  emit(payload: RunEvent) {
+  emit(payload: RunEvent | TaskEvent) {
     this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>);
   }
 
@@ -75,8 +77,19 @@ const sessionDetail: SessionDetailResponse = {
     evidence_ledger: [],
     compact_summaries: [],
     library_cards: [],
+    verification_memory: [],
     literature_searches: [],
     runs: [],
+    tasks: [],
+    session_files: [
+      {
+        file_id: "file-1",
+        label: "sample.pdf",
+        path: "D:/tmp/sample.pdf",
+        category: "paper",
+        updated_at: "2026-04-13T00:00:00Z",
+      },
+    ],
     archive: null,
   },
 };
@@ -131,6 +144,9 @@ describe("WorkspaceScreen", () => {
         input_text: "Focus question",
         preferred_paper_ids: [],
         risk_level: null,
+        working_state_version: 1,
+        active_background_task_ids: ["task-1"],
+        verification_state: "not_requested",
         final_artifact_ref: null,
         error_message: null,
         created_at: "2026-04-13T00:00:00Z",
@@ -138,6 +154,20 @@ describe("WorkspaceScreen", () => {
       },
     });
     mockedApi.runEventsUrl.mockReturnValue("http://127.0.0.1:8000/events");
+    mockedApi.taskEventsUrl.mockReturnValue("http://127.0.0.1:8000/task-events");
+    mockedApi.stopTask.mockResolvedValue({
+      task: {
+        task_id: "task-1",
+        session_id: "session-1",
+        agent_kind: "compact",
+        status: "cancelled",
+        input_text: "compact",
+        progress: 40,
+        result_payload: {},
+        created_at: "2026-04-13T00:00:00Z",
+        updated_at: "2026-04-13T00:00:04Z",
+      },
+    });
     vi.stubGlobal("EventSource", MockEventSource);
   });
 
@@ -146,6 +176,7 @@ describe("WorkspaceScreen", () => {
 
     expect((await screen.findAllByText("Test Session")).length).toBeGreaterThan(0);
     expect(screen.getByText("Analyze Session")).toBeInTheDocument();
+    expect(screen.getByText("Current Session File Manager")).toBeInTheDocument();
     expect(mockedApi.listSessions).toHaveBeenCalled();
     expect(mockedApi.getSession).toHaveBeenCalledWith("session-1");
   });
@@ -217,5 +248,48 @@ describe("WorkspaceScreen", () => {
     expect(await screen.findByText("Attention Is All You Need")).toBeInTheDocument();
     expect(await screen.findByText("Open Landing")).toBeInTheDocument();
     expect(await screen.findByText("Localize Reference")).toBeInTheDocument();
+  });
+
+  it("shows the background task drawer and allows stopping a task", async () => {
+    mockedApi.getSession.mockResolvedValueOnce({
+      ...sessionDetail,
+      artifacts: {
+        ...sessionDetail.artifacts,
+        tasks: [
+          {
+            task_id: "task-1",
+            session_id: "session-1",
+            agent_kind: "compact",
+            status: "running",
+            input_text: "compact",
+            progress: 20,
+            result_payload: {},
+            created_at: "2026-04-13T00:00:00Z",
+            updated_at: "2026-04-13T00:00:00Z",
+          },
+        ],
+      },
+    });
+
+    render(<WorkspaceScreen />);
+
+    await screen.findAllByText("Test Session");
+    expect(await screen.findByText("Task Drawer")).toBeInTheDocument();
+
+    const source = MockEventSource.instances[0];
+    await act(async () => {
+      source.emit({
+        event_id: "task-evt-1",
+        task_id: "task-1",
+        sequence_number: 1,
+        event_type: "task_progress",
+        payload: { progress: 55, current_step: "ready_for_merge" },
+        created_at: "2026-04-13T00:00:01Z",
+      });
+    });
+
+    expect(await screen.findByText("ready_for_merge (55%)")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Stop Task"));
+    await waitFor(() => expect(mockedApi.stopTask).toHaveBeenCalledWith("session-1", "task-1"));
   });
 });

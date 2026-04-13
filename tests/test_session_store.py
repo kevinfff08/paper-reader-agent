@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backend.app.core.models.domain import CompactSummary, DiscoveredPaper, EvidenceLedgerEntry, LiteratureSearchRecord, MemoryNote, RunEvent, RunSummary
+from backend.app.core.models.domain import CompactSummary, DiscoveredPaper, EvidenceLedgerEntry, LiteratureSearchRecord, MemoryNote, RunEvent, RunSummary, TaskEvent, TaskSummary
 from backend.app.storage.session_store import SessionStore
 
 
@@ -26,9 +26,11 @@ def test_session_store_creates_expected_structure(isolated_session_root) -> None
         "memory",
         "memory/evidence",
         "memory/compact",
+        "memory/verification",
         "archive",
         "logs",
         "runs",
+        "tasks",
     ):
         assert (session_dir / folder).exists()
 
@@ -111,6 +113,7 @@ def test_session_store_persists_run_and_layered_memory(isolated_session_root) ->
             session_id=session.session_id,
             boundary_label="qa:method",
             content="The answer established the two-stage method.",
+            restored_context_refs=["Method section"],
             created_at=now,
         ),
     )
@@ -120,6 +123,7 @@ def test_session_store_persists_run_and_layered_memory(isolated_session_root) ->
     assert artifacts.evidence_ledger[0].label == "Method section"
     assert artifacts.compact_summaries[0].boundary_label == "qa:method"
     assert store.list_run_events(session.session_id, "run-123")[0].event_type == "run_started"
+    assert artifacts.session_files
 
 
 def test_session_store_persists_literature_searches(isolated_session_root) -> None:
@@ -176,3 +180,40 @@ def test_session_store_rejects_formal_root_in_test_mode(monkeypatch) -> None:
         assert "formal data/sessions" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("SessionStore should reject the formal session root in test mode")
+
+
+def test_session_store_persists_background_tasks(isolated_session_root) -> None:
+    store = SessionStore(isolated_session_root)
+    session = store.create_session(
+        session_name="Task Session",
+        categories=[],
+        user_goal=None,
+        background=None,
+        external_links=[],
+    )
+    now = datetime.now(UTC)
+    task = TaskSummary(
+        task_id="task-123",
+        session_id=session.session_id,
+        agent_kind="compact",
+        status="running",
+        input_text="compact",
+        progress=25,
+        result_payload={"snapshot_id": "snap-1"},
+        created_at=now,
+        updated_at=now,
+    )
+    store.create_task(task)
+    store.append_task_event(
+        session.session_id,
+        TaskEvent(
+            event_id="task-evt-1",
+            task_id=task.task_id,
+            sequence_number=1,
+            event_type="task_started",
+            payload={"agent_kind": "compact"},
+            created_at=now,
+        ),
+    )
+    assert store.get_task(session.session_id, "task-123").agent_kind == "compact"
+    assert store.list_task_events(session.session_id, "task-123")[0].event_type == "task_started"

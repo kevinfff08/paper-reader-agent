@@ -57,6 +57,10 @@ def test_session_analysis_question_archive_flow(monkeypatch, isolated_session_ro
     assert '"event_type": "assistant_delta"' in event_stream
     assert '"event_type": "run_completed"' in event_stream
 
+    task_list_response = client.get(f"/sessions/{session_id}/tasks")
+    assert task_list_response.status_code == 200
+    assert len(task_list_response.json()["tasks"]) >= 1
+
     question_response = client.post(
         f"/sessions/{session_id}/questions",
         json={"question": "What should I inspect in the method details?", "preferred_paper_ids": []},
@@ -79,6 +83,8 @@ def test_session_analysis_question_archive_flow(monkeypatch, isolated_session_ro
     assert len(payload["artifacts"]["analyses"]) >= 2
     assert payload["artifacts"]["runs"]
     assert payload["artifacts"]["compact_summaries"]
+    assert payload["artifacts"]["tasks"]
+    assert payload["artifacts"]["session_files"]
 
 
 def test_discovery_and_localize_flow(monkeypatch, isolated_session_root: Path) -> None:

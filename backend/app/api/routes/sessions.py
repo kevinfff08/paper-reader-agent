@@ -15,6 +15,7 @@ from backend.app.core.models.api import (
     ArchiveSessionRequest,
     AskQuestionRequest,
     CreateRunRequest,
+    CreateTaskRequest,
     CreateSessionRequest,
     DiscoverLiteratureRequest,
     DiscoverLiteratureResponse,
@@ -25,6 +26,8 @@ from backend.app.core.models.api import (
     RunResponse,
     SessionDetailResponse,
     SessionListResponse,
+    TaskListResponse,
+    TaskResponse,
 )
 from backend.app.core.models.domain import LiteratureSearchRecord, ReferenceAsset
 from backend.app.services.discovery.search_broker import DiscoveryContext
@@ -253,6 +256,61 @@ async def stream_run_events(request: Request, session_id: str, run_id: str) -> S
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+@router.post("/sessions/{session_id}/tasks", response_model=TaskResponse)
+def create_task(request: Request, session_id: str, payload: CreateTaskRequest) -> TaskResponse:
+    try:
+        request.app.state.store.get_session(session_id)
+        task = request.app.state.task_engine.start_task(
+            session_id,
+            agent_kind=payload.agent_kind,  # type: ignore[arg-type]
+            input_text=payload.input,
+            parent_run_id=payload.parent_run_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskResponse(task=task)
+
+
+@router.get("/sessions/{session_id}/tasks", response_model=TaskListResponse)
+def list_tasks(request: Request, session_id: str) -> TaskListResponse:
+    try:
+        request.app.state.store.get_session(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskListResponse(tasks=request.app.state.store.list_tasks(session_id))
+
+
+@router.get("/sessions/{session_id}/tasks/{task_id}", response_model=TaskResponse)
+def get_task(request: Request, session_id: str, task_id: str) -> TaskResponse:
+    try:
+        task = request.app.state.store.get_task(session_id, task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskResponse(task=task)
+
+
+@router.get("/sessions/{session_id}/tasks/{task_id}/events")
+async def stream_task_events(request: Request, session_id: str, task_id: str) -> StreamingResponse:
+    try:
+        request.app.state.store.get_task(session_id, task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StreamingResponse(
+        request.app.state.task_engine.stream_events(session_id, task_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@router.post("/sessions/{session_id}/tasks/{task_id}/stop", response_model=TaskResponse)
+def stop_task(request: Request, session_id: str, task_id: str) -> TaskResponse:
+    try:
+        task = request.app.state.task_engine.stop_task(session_id, task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return TaskResponse(task=task)
 
 
 @router.post("/sessions/{session_id}/analyze", response_model=AnalysisResponse)

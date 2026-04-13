@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from backend.app.core.config import ensure_safe_session_root, is_test_mode_enabled
@@ -25,8 +26,13 @@ from backend.app.core.models.domain import (
     ReferenceAsset,
     RunEvent,
     RunSummary,
+    SessionFileEntry,
     SessionArtifacts,
     SessionSummary,
+    TaskEvent,
+    TaskSummary,
+    VerificationNote,
+    WorkingStateSnapshot,
 )
 from backend.app.logging.session_logger import get_session_logger
 
@@ -40,6 +46,7 @@ class SessionStore:
     def __init__(self, root: Path, *, test_mode: bool | None = None):
         self.root = root
         self.test_mode = is_test_mode_enabled() if test_mode is None else test_mode
+        self._io_lock = threading.RLock()
         ensure_safe_session_root(self.root, test_mode=self.test_mode)
         self.root.mkdir(parents=True, exist_ok=True)
         self.library_root = self.root / "_library"
@@ -69,9 +76,11 @@ class SessionStore:
             "memory",
             "memory/evidence",
             "memory/compact",
+            "memory/verification",
             "archive",
             "logs",
             "runs",
+            "tasks",
         ):
             (session_dir / child).mkdir(parents=True, exist_ok=True)
 
@@ -93,7 +102,10 @@ class SessionStore:
         self._write_json(session_dir / "analysis_index.json", [])
         self._write_json(session_dir / "qa_index.json", [])
         self._write_json(session_dir / "runs" / "index.json", [])
+        self._write_json(session_dir / "tasks" / "index.json", [])
         self._write_json(session_dir / "memory" / "compact" / "summaries.json", [])
+        self._write_json(session_dir / "memory" / "verification" / "notes.json", [])
+        self._write_json(session_dir / "memory" / "working_state.json", {"version": 0})
         logger = get_session_logger(session_dir, slug, created_label)
         logger.info("Session created: %s", session_name)
         self.save_memory(
@@ -111,12 +123,12 @@ class SessionStore:
         for path in sorted(self.root.glob("*"), reverse=True):
             session_file = path / "session.json"
             if session_file.exists():
-                sessions.append(SessionSummary.model_validate_json(session_file.read_text(encoding="utf-8")))
+                sessions.append(self._read_model_json(session_file, SessionSummary))
         return sessions
 
     def get_session(self, session_id: str) -> SessionSummary:
         session_dir = self.session_dir(session_id)
-        return SessionSummary.model_validate_json((session_dir / "session.json").read_text(encoding="utf-8"))
+        return self._read_model_json(session_dir / "session.json", SessionSummary)
 
     def update_session(self, session: SessionSummary) -> None:
         self._write_model(self.session_dir(session.session_id) / "session.json", session)
@@ -126,7 +138,7 @@ class SessionStore:
             session_file = path / "session.json"
             if not session_file.exists():
                 continue
-            session = SessionSummary.model_validate_json(session_file.read_text(encoding="utf-8"))
+            session = self._read_model_json(session_file, SessionSummary)
             if session.session_id == session_id:
                 return path
         raise FileNotFoundError(f"Session not found: {session_id}")
@@ -167,7 +179,7 @@ class SessionStore:
     def load_parsed_documents(self, session_id: str) -> list[ParsedDocument]:
         session_dir = self.session_dir(session_id)
         return [
-            ParsedDocument.model_validate_json(path.read_text(encoding="utf-8"))
+            self._read_model_json(path, ParsedDocument)
             for path in sorted((session_dir / "parsed").glob("*.json"))
         ]
 
@@ -219,7 +231,7 @@ class SessionStore:
     def list_literature_searches(self, session_id: str) -> list[LiteratureSearchRecord]:
         searches_dir = self.session_dir(session_id) / "searches"
         return [
-            LiteratureSearchRecord.model_validate_json(path.read_text(encoding="utf-8"))
+            self._read_model_json(path, LiteratureSearchRecord)
             for path in sorted(searches_dir.glob("*.json"))
             if path.name != "index.json"
         ]
@@ -228,7 +240,7 @@ class SessionStore:
         path = self.session_dir(session_id) / "searches" / f"{search_id}.json"
         if not path.exists():
             raise FileNotFoundError(f"Search not found: {search_id}")
-        return LiteratureSearchRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._read_model_json(path, LiteratureSearchRecord)
 
     def save_qa_record(self, session_id: str, qa_record: QARecord) -> QARecord:
         session_dir = self.session_dir(session_id)
@@ -253,7 +265,7 @@ class SessionStore:
         path = self.session_dir(session_id) / "memory" / "memory.json"
         if not path.exists():
             return None
-        return MemoryNote.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._read_model_json(path, MemoryNote)
 
     def save_evidence_entry(self, session_id: str, entry: EvidenceLedgerEntry) -> EvidenceLedgerEntry:
         path = self.session_dir(session_id) / "memory" / "evidence" / "ledger.jsonl"
@@ -290,6 +302,81 @@ class SessionStore:
             return cards
         return [card for card in cards if card.session_id == session_id]
 
+    def load_working_state_version(self, session_id: str) -> int:
+        payload = self._read_json(self.session_dir(session_id) / "memory" / "working_state.json", {"version": 0})
+        if isinstance(payload, dict):
+            return int(payload.get("version", 0))
+        return 0
+
+    def bump_working_state_version(self, session_id: str) -> int:
+        version = self.load_working_state_version(session_id) + 1
+        self._write_json(self.session_dir(session_id) / "memory" / "working_state.json", {"version": version})
+        return version
+
+    def save_working_snapshot(self, session_id: str, snapshot: WorkingStateSnapshot) -> WorkingStateSnapshot:
+        path = self.session_dir(session_id) / "tasks" / f"{snapshot.snapshot_id}.snapshot.json"
+        self._write_model(path, snapshot)
+        return snapshot
+
+    def get_working_snapshot(self, session_id: str, snapshot_id: str) -> WorkingStateSnapshot:
+        path = self.session_dir(session_id) / "tasks" / f"{snapshot_id}.snapshot.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Working snapshot not found: {snapshot_id}")
+        return self._read_model_json(path, WorkingStateSnapshot)
+
+    def save_verification_note(self, session_id: str, note: VerificationNote) -> VerificationNote:
+        path = self.session_dir(session_id) / "memory" / "verification" / "notes.json"
+        payload = self._read_json(path, [])
+        payload.append(note.model_dump(mode="json"))
+        self._write_json(path, payload)
+        return note
+
+    def list_verification_notes(self, session_id: str) -> list[VerificationNote]:
+        path = self.session_dir(session_id) / "memory" / "verification" / "notes.json"
+        payload = self._read_json(path, [])
+        return [VerificationNote.model_validate(item) for item in payload]
+
+    def create_task(self, task: TaskSummary) -> TaskSummary:
+        session_dir = self.session_dir(task.session_id)
+        path = session_dir / "tasks" / f"{task.task_id}.json"
+        self._write_model(path, task)
+        index_path = session_dir / "tasks" / "index.json"
+        index = self._read_json(index_path, [])
+        index.append(task.model_dump(mode="json"))
+        self._write_json(index_path, index)
+        return task
+
+    def update_task(self, session_id: str, task: TaskSummary) -> TaskSummary:
+        session_dir = self.session_dir(session_id)
+        path = session_dir / "tasks" / f"{task.task_id}.json"
+        self._write_model(path, task)
+        index_path = session_dir / "tasks" / "index.json"
+        index = [
+            task.model_dump(mode="json") if item.get("task_id") == task.task_id else item
+            for item in self._read_json(index_path, [])
+        ]
+        self._write_json(index_path, index)
+        return task
+
+    def get_task(self, session_id: str, task_id: str) -> TaskSummary:
+        path = self.session_dir(session_id) / "tasks" / f"{task_id}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Task not found: {task_id}")
+        return self._read_model_json(path, TaskSummary)
+
+    def list_tasks(self, session_id: str) -> list[TaskSummary]:
+        payload = self._read_json(self.session_dir(session_id) / "tasks" / "index.json", [])
+        return [TaskSummary.model_validate(item) for item in payload]
+
+    def append_task_event(self, session_id: str, event: TaskEvent) -> TaskEvent:
+        path = self.session_dir(session_id) / "tasks" / f"{event.task_id}.events.jsonl"
+        self._append_jsonl(path, event.model_dump(mode="json"))
+        return event
+
+    def list_task_events(self, session_id: str, task_id: str) -> list[TaskEvent]:
+        path = self.session_dir(session_id) / "tasks" / f"{task_id}.events.jsonl"
+        return [TaskEvent.model_validate(item) for item in self._read_jsonl(path)]
+
     def create_run(self, run: RunSummary) -> RunSummary:
         session_dir = self.session_dir(run.session_id)
         path = session_dir / "runs" / f"{run.run_id}.json"
@@ -316,14 +403,7 @@ class SessionStore:
         path = self.session_dir(session_id) / "runs" / f"{run_id}.json"
         if not path.exists():
             raise FileNotFoundError(f"Run not found: {run_id}")
-        last_error: Exception | None = None
-        for _ in range(5):
-            try:
-                return RunSummary.model_validate_json(path.read_text(encoding="utf-8"))
-            except ValueError as exc:
-                last_error = exc
-                time.sleep(0.02)
-        raise last_error or RuntimeError(f"Unable to read run: {run_id}")
+        return self._read_model_json(path, RunSummary)
 
     def list_runs(self, session_id: str) -> list[RunSummary]:
         payload = self._read_json(self.session_dir(session_id) / "runs" / "index.json", [])
@@ -350,7 +430,7 @@ class SessionStore:
         path = self.session_dir(session_id) / "archive" / "archive.json"
         if not path.exists():
             return None
-        return ArchiveArtifact.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._read_model_json(path, ArchiveArtifact)
 
     def get_artifacts(self, session_id: str) -> SessionArtifacts:
         return SessionArtifacts(
@@ -362,10 +442,45 @@ class SessionStore:
             evidence_ledger=self.list_evidence_entries(session_id),
             compact_summaries=self.list_compact_summaries(session_id),
             library_cards=self.list_library_cards(session_id),
+            verification_memory=self.list_verification_notes(session_id),
             literature_searches=self.list_literature_searches(session_id),
             runs=self.list_runs(session_id),
+            tasks=self.list_tasks(session_id),
+            session_files=self.list_session_files(session_id),
             archive=self.load_archive(session_id),
         )
+
+    def list_session_files(self, session_id: str) -> list[SessionFileEntry]:
+        session_dir = self.session_dir(session_id)
+        entries: list[SessionFileEntry] = []
+        patterns: list[tuple[str, str, str]] = [
+            ("uploads", "*.pdf", "paper"),
+            ("uploads", "*.txt", "paper"),
+            ("parsed", "*.json", "parsed"),
+            ("references", "*.md", "reference"),
+            ("analysis", "*.md", "analysis"),
+            ("analysis", "*.json", "analysis"),
+            ("archive", "*.md", "archive"),
+            ("memory", "memory.md", "memory"),
+            ("memory/evidence", "ledger.jsonl", "memory"),
+            ("memory/compact", "summaries.json", "memory"),
+            ("memory/verification", "notes.json", "memory"),
+            ("tasks", "*.json", "task"),
+        ]
+        for folder, pattern, category in patterns:
+            for path in sorted((session_dir / folder).glob(pattern)):
+                if path.name == "index.json" or path.name.endswith(".events.jsonl") or path.name.endswith(".snapshot.json"):
+                    continue
+                entries.append(
+                    SessionFileEntry(
+                        file_id=str(path),
+                        label=path.name,
+                        path=str(path),
+                        category=category,  # type: ignore[arg-type]
+                        updated_at=datetime.fromtimestamp(path.stat().st_mtime, tz=UTC),
+                    )
+                )
+        return sorted(entries, key=lambda item: (item.category, item.label.lower()))
 
     def _render_memory_markdown(self, memory: MemoryNote) -> str:
         lines = [
@@ -390,35 +505,58 @@ class SessionStore:
         return "\n".join(lines)
 
     def _read_json(self, path: Path, default: list[dict] | list[str] | list | dict) -> list | dict:
-        if not path.exists():
-            return default
-        return json.loads(path.read_text(encoding="utf-8"))
+        with self._io_lock:
+            if not path.exists():
+                return default
+            last_error: Exception | None = None
+            for _ in range(5):
+                try:
+                    return json.loads(path.read_text(encoding="utf-8"))
+                except ValueError as exc:
+                    last_error = exc
+                    time.sleep(0.02)
+            raise last_error or RuntimeError(f"Unable to read json file: {path}")
 
     def _write_json(self, path: Path, payload: list | dict) -> None:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        with self._io_lock:
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _append_jsonl(self, path: Path, payload: dict) -> None:
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False))
-            handle.write("\n")
+        with self._io_lock:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False))
+                handle.write("\n")
 
     def _read_jsonl(self, path: Path) -> list[dict]:
-        if not path.exists():
-            return []
-        items: list[dict] = []
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                items.append(json.loads(line))
-        return items
+        with self._io_lock:
+            if not path.exists():
+                return []
+            items: list[dict] = []
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    items.append(json.loads(line))
+            return items
 
     def _write_model(self, path: Path, model: object) -> None:
-        if hasattr(model, "model_dump_json"):
-            path.write_text(model.model_dump_json(indent=2), encoding="utf-8")  # type: ignore[attr-defined]
-        else:
-            raise TypeError("Unsupported model type")
+        with self._io_lock:
+            if hasattr(model, "model_dump_json"):
+                path.write_text(model.model_dump_json(indent=2), encoding="utf-8")  # type: ignore[attr-defined]
+            else:
+                raise TypeError("Unsupported model type")
+
+    def _read_model_json(self, path: Path, model_type: type[T]) -> T:
+        last_error: Exception | None = None
+        for _ in range(5):
+            try:
+                with self._io_lock:
+                    return model_type.model_validate_json(path.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+            except ValueError as exc:
+                last_error = exc
+                time.sleep(0.02)
+        raise last_error or RuntimeError(f"Unable to read model json: {path}")
 
     def _slugify(self, value: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
