@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
             search_broker=search_broker,
         ),
         verifier=AnswerVerifier(),
-        archive_builder=ArchiveReportBuilder(),
+        archive_builder=ArchiveReportBuilder(llm_client=llm_client),
     )
 
     app = FastAPI(title="PaperReader API", version="0.1.0")

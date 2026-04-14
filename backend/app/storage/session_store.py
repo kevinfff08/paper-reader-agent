@@ -418,10 +418,22 @@ class SessionStore:
         path = self.session_dir(session_id) / "runs" / f"{run_id}.events.jsonl"
         return [RunEvent.model_validate(item) for item in self._read_jsonl(path)]
 
-    def save_archive(self, session_id: str, archive: ArchiveArtifact, markdown: str) -> ArchiveArtifact:
+    def save_archive(
+        self,
+        session_id: str,
+        archive: ArchiveArtifact,
+        markdown: str,
+        *,
+        warnings_json: str | None = None,
+        warnings_markdown: str | None = None,
+    ) -> ArchiveArtifact:
         session_dir = self.session_dir(session_id)
         md_path = session_dir / "archive" / "archive.md"
         md_path.write_text(markdown, encoding="utf-8")
+        if warnings_json is not None:
+            (session_dir / "archive" / "archive_warnings.json").write_text(warnings_json, encoding="utf-8")
+        if warnings_markdown is not None:
+            (session_dir / "archive" / "archive_warnings.md").write_text(warnings_markdown, encoding="utf-8")
         archive = archive.model_copy(update={"markdown_path": str(md_path)})
         self._write_model(session_dir / "archive" / "archive.json", archive)
         return archive

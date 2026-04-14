@@ -27,6 +27,7 @@ PaperReader 针对的是这些问题。它把“读论文”建模为一个持�
 - 高风险问答门禁：方法、实验、数值结论等高风险问题在缺少原文证据时不会直接放行
 - 本地优先文件管理：session 内的论文、解析产物、引用、分析、归档、记忆文件统一管理
 - 文献补充：支持发现相关文献并本地化到当前 session
+- 归档质量提升：`archive` 会直接保留分析结果，同时把问答整理为综合总结，并输出轻量 Markdown 校验警告
 - 持久化任务系统：后台任务有状态、有日志、有进度、可停止、刷新后可恢复
 - 前后端测试：覆盖流式事件、任务面板、记忆存储、运行时 API 与测试数据隔离
 
@@ -253,7 +254,29 @@ PaperReader 当前维护五层记忆：
 - 手动停止按钮
 - 手动关闭面板按钮
 
-## 五、目录结构
+## 五、归档输出说明
+
+`archive` 当前默认会生成三类归档产物：
+
+- `archive.md`：最终 Markdown 归档正文
+- `archive_warnings.json`：结构化校验告警，适合程序消费
+- `archive_warnings.md`：可读告警摘要，适合人工检查
+
+最终归档正文遵循以下约定：
+
+- 原始分析报告直接进入主文，不做二次压缩
+- 问答部分会整理成 `Consolidated Q&A Insights`，而不是简单时间顺序堆砌
+- 原始问答仍会保留在 `Appendix: Raw Follow-up Q&A` 中，便于追溯
+
+Markdown 校验目前只做轻量、非阻塞处理：
+
+- 可恢复的未闭合 fenced block 会自动补全
+- 重复空行会被规范化
+- 标题跳级、损坏表格、疑似不平衡公式、坏图片路径会记录 warning
+- 非法 `mermaid` block 会降级为普通代码块
+- 原始 HTML / script 风格内容会被移除并告警
+
+## 六、目录结构
 
 ```text
 PaperReader/
@@ -291,38 +314,6 @@ PaperReader/
 └─ run_tests.bat               # 测试入口
 ```
 
-## 六、运行时 API
-
-### 1. 前台 Run API
-
-```http
-POST /sessions/{session_id}/runs
-GET  /sessions/{session_id}/runs/{run_id}
-GET  /sessions/{session_id}/runs/{run_id}/events
-```
-
-### 2. 后台 Task API
-
-```http
-POST /sessions/{session_id}/tasks
-GET  /sessions/{session_id}/tasks
-GET  /sessions/{session_id}/tasks/{task_id}
-GET  /sessions/{session_id}/tasks/{task_id}/events
-POST /sessions/{session_id}/tasks/{task_id}/stop
-```
-
-### 3. 兼容接口
-
-为了平滑迁移，仓库仍保留：
-
-```http
-/analyze
-/questions
-/archive
-```
-
-这些接口只是 runtime 的包装层，不应再发展出第二套业务路径。
-
 ## 七、数据落盘结构
 
 单个 session 采用本地文件系统持久化，结构大致如下：
@@ -342,6 +333,10 @@ data/sessions/<session_slug>__<timestamp>/
 ├─ runs/
 ├─ tasks/
 ├─ archive/
+│  ├─ archive.md
+│  ├─ archive.json
+│  ├─ archive_warnings.json
+│  └─ archive_warnings.md
 ├─ logs/
 └─ memory/
    ├─ memory.md
@@ -360,11 +355,12 @@ data/sessions/_library/
 ### 1. Python
 
 - Python `>= 3.11`
-- 建议使用你现有的 Conda 环境或虚拟环境
 
 安装后端依赖：
 
 ```bash
+conda create -n research_tools python=3.11
+conda activate research_tools
 pip install -e .[dev]
 ```
 
@@ -450,6 +446,7 @@ npm run dev
 ### 后端测试
 
 ```bash
+conda activate research_tools
 C:\Users\kevin\anaconda3\envs\research_tools\python.exe -m pytest tests -q
 ```
 

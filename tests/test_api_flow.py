@@ -75,6 +75,9 @@ def test_session_analysis_question_archive_flow(monkeypatch, isolated_session_ro
         json={"include_qa": True},
     )
     assert archive_response.status_code == 200
+    session_dir = app.state.store.session_dir(session_id)
+    assert (session_dir / "archive" / "archive_warnings.json").exists()
+    assert (session_dir / "archive" / "archive_warnings.md").exists()
 
     detail_response = client.get(f"/sessions/{session_id}")
     assert detail_response.status_code == 200

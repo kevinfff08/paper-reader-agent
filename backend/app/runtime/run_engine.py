@@ -419,7 +419,8 @@ class RunEngine:
     def _execute_archive(self, run: RunSummary, sequence_number: int) -> tuple[str, int]:
         artifacts = self.store.get_artifacts(run.session_id)
         sequence_number = self._emit(run, sequence_number, "tool_call_started", {"tool": "build_archive_draft"})
-        markdown = self.archive_builder.build(
+        archive_dir = self.store.session_dir(run.session_id) / "archive"
+        build_result = self.archive_builder.build(
             session=self.store.get_session(run.session_id),
             analyses=artifacts.analyses,
             qa_records=artifacts.qa_records,
@@ -427,6 +428,8 @@ class RunEngine:
             memory_note=artifacts.memory,
             compact_summaries=artifacts.compact_summaries,
             library_cards=artifacts.library_cards,
+            verification_notes=artifacts.verification_memory,
+            output_dir=archive_dir,
         )
         archive = ArchiveArtifact(
             archive_id=uuid4().hex[:12],
@@ -434,7 +437,13 @@ class RunEngine:
             markdown_path="",
             created_at=datetime.now(UTC),
         )
-        archive = self.store.save_archive(run.session_id, archive, markdown)
+        archive = self.store.save_archive(
+            run.session_id,
+            archive,
+            build_result.markdown,
+            warnings_json=build_result.validation.warnings_as_json(),
+            warnings_markdown=build_result.validation.warnings_as_markdown(),
+        )
         sequence_number = self._emit(run, sequence_number, "tool_call_finished", {"tool": "build_archive_draft"})
         sequence_number = self._emit_text(run, sequence_number, "Archive draft generated and saved to the session.")
         return f"archive:{archive.archive_id}", sequence_number
