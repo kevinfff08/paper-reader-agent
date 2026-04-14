@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backend.app.core.models.domain import CompactSummary, DiscoveredPaper, EvidenceLedgerEntry, LiteratureSearchRecord, MemoryNote, RunEvent, RunSummary, TaskEvent, TaskSummary
+from backend.app.core.models.domain import CompactSummary, DiscoveredPaper, EvidenceLedgerEntry, LiteratureSearchRecord, MemoryNote, ParsedDocument, ParsedSection, RunEvent, RunSummary, TaskEvent, TaskSummary
 from backend.app.storage.session_store import SessionStore
 
 
@@ -124,6 +124,43 @@ def test_session_store_persists_run_and_layered_memory(isolated_session_root) ->
     assert artifacts.compact_summaries[0].boundary_label == "qa:method"
     assert store.list_run_events(session.session_id, "run-123")[0].event_type == "run_started"
     assert artifacts.session_files
+
+
+def test_session_store_lists_parsed_sidecar_artifacts(isolated_session_root) -> None:
+    store = SessionStore(isolated_session_root)
+    session = store.create_session(
+        session_name="Parsed Files Session",
+        categories=[],
+        user_goal=None,
+        background=None,
+        external_links=[],
+    )
+    session_dir = store.session_dir(session.session_id)
+    paper = store.save_uploaded_paper(
+        session.session_id,
+        filename="paper.pdf",
+        media_type="application/pdf",
+        content=b"%PDF-1.4\n",
+    )
+    parsed = ParsedDocument(
+        paper_id=paper.paper_id,
+        source_path=str(session_dir / "uploads" / "paper.pdf"),
+        title="Parsed Title",
+        abstract="",
+        sections=[ParsedSection(heading="Method", content="A method section.")],
+        chunks=[],
+        plain_text="A method section.",
+        created_at=datetime.now(UTC),
+    )
+    store.save_parsed_document(session.session_id, parsed)
+    (session_dir / "parsed" / f"{paper.paper_id}.md").write_text("# Parsed Title\n", encoding="utf-8")
+    (session_dir / "parsed" / "docling").mkdir(parents=True, exist_ok=True)
+    (session_dir / "parsed" / "docling" / f"{paper.paper_id}.json").write_text("{}", encoding="utf-8")
+
+    files = store.list_session_files(session.session_id)
+    parsed_files = [item.label for item in files if item.category == "parsed"]
+    assert f"{paper.paper_id}.json" in parsed_files
+    assert f"{paper.paper_id}.md" in parsed_files
 
 
 def test_session_store_persists_literature_searches(isolated_session_root) -> None:

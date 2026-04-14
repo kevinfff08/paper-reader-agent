@@ -37,7 +37,14 @@ def create_app() -> FastAPI:
     run_engine = RunEngine(
         task_engine=TaskEngine(store=store, llm_client=llm_client, verifier=AnswerVerifier()),
         store=store,
-        parser=DocumentParser(max_chars=settings.max_parse_chars),
+        parser=DocumentParser(
+            max_chars=settings.max_parse_chars,
+            docling_enabled=settings.docling_enabled,
+            docling_artifacts_path=settings.docling_artifacts_path,
+            docling_max_pages=settings.docling_max_pages,
+            docling_max_file_size_mb=settings.docling_max_file_size_mb,
+            docling_omp_threads=settings.docling_omp_threads,
+        ),
         llm_client=llm_client,
         local_retriever=LocalEvidenceRetriever(),
         external_retriever=ExternalRetriever(

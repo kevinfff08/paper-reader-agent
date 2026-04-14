@@ -99,6 +99,10 @@ class ParsedSection(BaseModel):
 
     heading: str
     content: str
+    section_id: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    section_path: str | None = None
     page_label: str | None = None
 
 
@@ -108,7 +112,36 @@ class ParsedChunk(BaseModel):
     chunk_id: str
     heading: str
     content: str
+    chunk_type: Literal["narrative", "table", "figure"] = "narrative"
+    page_start: int | None = None
+    page_end: int | None = None
+    section_path: str | None = None
+    table_refs: list[str] = Field(default_factory=list)
+    picture_refs: list[str] = Field(default_factory=list)
+    rank_text: str | None = None
     page_label: str | None = None
+
+
+class ParsedTable(BaseModel):
+    """A normalized table extracted from a paper."""
+
+    table_id: str
+    caption: str = ""
+    page_label: str | None = None
+    locator: str | None = None
+    markdown: str = ""
+    nearby_text: str = ""
+
+
+class ParsedPicture(BaseModel):
+    """A normalized picture region extracted from a paper."""
+
+    picture_id: str
+    caption: str = ""
+    page_label: str | None = None
+    locator: str | None = None
+    nearby_text: str = ""
+    bbox: list[float] = Field(default_factory=list)
 
 
 class ParsedDocument(BaseModel):
@@ -121,6 +154,14 @@ class ParsedDocument(BaseModel):
     sections: list[ParsedSection]
     chunks: list[ParsedChunk] = Field(default_factory=list)
     plain_text: str
+    parser_backend: Literal["docling", "legacy"] = "legacy"
+    parser_version: str = "legacy-v1"
+    page_count: int | None = None
+    docling_json_path: str | None = None
+    markdown_path: str | None = None
+    tables: list[ParsedTable] = Field(default_factory=list)
+    pictures: list[ParsedPicture] = Field(default_factory=list)
+    metadata: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
 
 

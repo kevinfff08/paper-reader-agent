@@ -17,8 +17,10 @@ frontend/dist/
 data/
 logs/
 backend_data/
+.cache/
 .tmp_pytest/
 .tmp-tests/
+.tmp-pip/
 sandbox-write-check/
 paperreader-flow-*/
 paperreader-tests-*/

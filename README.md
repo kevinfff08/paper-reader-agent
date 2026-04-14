@@ -22,6 +22,8 @@ PaperReader 针对的是这些问题。它把“读论文”建模为一个持�
 - 流式输出：前端通过 SSE 接收主运行事件，逐步显示模型输出
 - 后台专属 Agent：`compact`、`session_memory_update`、`memory_extraction`、`verification`
 - 分层记忆：`working memory`、`evidence ledger`、`compact memory`、`library memory`、`verification memory`
+- 结构化论文解析：PDF 默认走 `Docling` 标准 pipeline，生成正文、章节、表格、图片区域与可回溯定位信息
+- 面向问答的本地检索：解析结果会归一化成 `narrative / table / figure` 三类 chunk，供问答、验证和归档复用
 - 高风险问答门禁：方法、实验、数值结论等高风险问题在缺少原文证据时不会直接放行
 - 本地优先文件管理：session 内的论文、解析产物、引用、分析、归档、记忆文件统一管理
 - 文献补充：支持发现相关文献并本地化到当前 session
@@ -81,6 +83,27 @@ flowchart LR
 - `RunEngine` 和 `TaskEngine` 都会使用 `LLM Client / CLIProxy / Provider`
 - 两者都会把状态、事件、记忆和产物写入 `SessionStore`
 - `SessionStore` 再统一管理多层记忆与 session 文件
+
+### 0.(补充) 论文解析与本地证据
+
+当前默认解析策略是：
+
+- `PDF`：走 `Docling` 本地标准 pipeline
+- `TXT`：保留轻量 fallback 路径
+
+解析后的论文不会只保留一份纯文本，而是会生成三层产物：
+
+- 归一化 `ParsedDocument JSON`
+- 便于人工查看和 LLM 输入的 `Markdown`
+- 原始 `Docling` lossless `JSON`
+
+归一化结果会尽量保留：
+
+- `title / abstract / sections / plain_text`
+- `narrative / table / figure` 三类 chunk
+- 页码、caption、locator、bbox 等可追溯元数据
+
+本地检索默认优先使用 chunk 的 `rank_text` 做词法召回，同时保留 `chunk.content` 作为实际证据摘录，方便 `answer`、`verification` 和 `archive` 共用同一份结构化基础。
 
 ### 1. 前台主运行时
 
@@ -308,6 +331,10 @@ POST /sessions/{session_id}/tasks/{task_id}/stop
 data/sessions/<session_slug>__<timestamp>/
 ├─ uploads/
 ├─ parsed/
+│  ├─ <paper_id>.json
+│  ├─ <paper_id>.md
+│  └─ docling/
+│     └─ <paper_id>.json
 ├─ references/
 ├─ searches/
 ├─ analysis/
@@ -373,12 +400,22 @@ copy .env.example .env
 - `TAVILY_API_KEY`
 - `SESSION_DATA_ROOT`
 - `MAX_PARSE_CHARS`
+- `DOCLING_ENABLED`
+- `DOCLING_ARTIFACTS_PATH`
+- `DOCLING_MAX_PAGES`
+- `DOCLING_MAX_FILE_SIZE_MB`
+- `DOCLING_OMP_THREADS`
 
 如果你使用 CLIProxy 或其他 OpenAI-compatible 代理，重点关注：
 
 - `LLM_PROVIDER`
 - `LLM_PROXY_URL`
 - `LLM_MODEL`
+
+如果你要实际解析 PDF，还需要注意两点：
+
+- `Docling` 默认标准 pipeline 会启用 OCR 和表格结构识别，首次运行可能下载模型 artifacts
+- 离线或受限网络环境下，建议提前把 artifacts 预下载到 `DOCLING_ARTIFACTS_PATH`，否则第一次 PDF 解析可能失败
 
 ## 九、快速开始
 

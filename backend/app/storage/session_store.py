@@ -453,22 +453,25 @@ class SessionStore:
     def list_session_files(self, session_id: str) -> list[SessionFileEntry]:
         session_dir = self.session_dir(session_id)
         entries: list[SessionFileEntry] = []
-        patterns: list[tuple[str, str, str]] = [
-            ("uploads", "*.pdf", "paper"),
-            ("uploads", "*.txt", "paper"),
-            ("parsed", "*.json", "parsed"),
-            ("references", "*.md", "reference"),
-            ("analysis", "*.md", "analysis"),
-            ("analysis", "*.json", "analysis"),
-            ("archive", "*.md", "archive"),
-            ("memory", "memory.md", "memory"),
-            ("memory/evidence", "ledger.jsonl", "memory"),
-            ("memory/compact", "summaries.json", "memory"),
-            ("memory/verification", "notes.json", "memory"),
-            ("tasks", "*.json", "task"),
+        patterns: list[tuple[str, str, str, bool]] = [
+            ("uploads", "*.pdf", "paper", False),
+            ("uploads", "*.txt", "paper", False),
+            ("parsed", "*.json", "parsed", True),
+            ("parsed", "*.md", "parsed", True),
+            ("references", "*.md", "reference", False),
+            ("analysis", "*.md", "analysis", False),
+            ("analysis", "*.json", "analysis", False),
+            ("archive", "*.md", "archive", False),
+            ("memory", "memory.md", "memory", False),
+            ("memory/evidence", "ledger.jsonl", "memory", False),
+            ("memory/compact", "summaries.json", "memory", False),
+            ("memory/verification", "notes.json", "memory", False),
+            ("tasks", "*.json", "task", False),
         ]
-        for folder, pattern, category in patterns:
-            for path in sorted((session_dir / folder).glob(pattern)):
+        for folder, pattern, category, recursive in patterns:
+            root = session_dir / folder
+            iterator = root.rglob(pattern) if recursive else root.glob(pattern)
+            for path in sorted(iterator):
                 if path.name == "index.json" or path.name.endswith(".events.jsonl") or path.name.endswith(".snapshot.json"):
                     continue
                 entries.append(

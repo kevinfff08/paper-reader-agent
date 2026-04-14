@@ -441,22 +441,40 @@ class RunEngine:
 
     def _parse_all_papers(self, run: RunSummary, sequence_number: int) -> tuple[list[ParsedDocument], int]:
         session = self.store.get_session(run.session_id)
+        existing_docs = {doc.paper_id: doc for doc in self.store.load_parsed_documents(run.session_id)}
+        parsed_dir = self.store.session_dir(run.session_id) / "parsed"
         docs: list[ParsedDocument] = []
         for paper in self.store.list_papers(run.session_id):
+            cached_doc = existing_docs.get(paper.paper_id)
+            if cached_doc is not None and self.parser.is_cache_valid(cached_doc, Path(paper.original_path)):
+                docs.append(cached_doc)
+                sequence_number = self._emit(
+                    run,
+                    sequence_number,
+                    "tool_call_finished",
+                    {"tool": "parse/index", "paper_id": paper.paper_id, "title": cached_doc.title, "cache_status": "hit"},
+                )
+                continue
+
             sequence_number = self._emit(
                 run,
                 sequence_number,
                 "tool_call_started",
-                {"tool": "parse/index", "paper_id": paper.paper_id, "filename": paper.filename},
+                {
+                    "tool": "parse/index",
+                    "paper_id": paper.paper_id,
+                    "filename": paper.filename,
+                    "cache_status": "miss" if cached_doc is None else "stale",
+                },
             )
-            parsed = self.parser.parse(paper.paper_id, Path(paper.original_path))
+            parsed = self.parser.parse(paper.paper_id, Path(paper.original_path), parsed_dir=parsed_dir)
             self.store.save_parsed_document(run.session_id, parsed)
             docs.append(parsed)
             sequence_number = self._emit(
                 run,
                 sequence_number,
                 "tool_call_finished",
-                {"tool": "parse/index", "paper_id": paper.paper_id, "title": parsed.title},
+                {"tool": "parse/index", "paper_id": paper.paper_id, "title": parsed.title, "cache_status": "refreshed"},
             )
         self._update_memory_from_parse(session, docs)
         return docs, sequence_number
@@ -842,12 +860,36 @@ class RunEngine:
             "follow_up": ("conclusion", "discussion", "limitations"),
         }
         wanted = mapping.get(section_key, ())
-        chosen = [
-            section.content
+        chosen_sections = [
+            section
             for section in doc.sections
             if any(token in section.heading.lower() for token in wanted)
         ]
-        return "\n\n".join(chosen[:3]) or doc.abstract or doc.plain_text[:4000]
+        chosen_chunks = [
+            chunk
+            for chunk in doc.chunks
+            if chunk.chunk_type == "narrative" and any(token in chunk.heading.lower() for token in wanted)
+        ]
+        chunk_rank = {"narrative": 0, "table": 1, "figure": 2}
+        prioritized_chunks = sorted(
+            [
+                chunk
+                for chunk in doc.chunks
+                if any(token in (chunk.section_path or chunk.heading).lower() for token in wanted)
+            ],
+            key=lambda chunk: chunk_rank.get(chunk.chunk_type, 99),
+        )
+
+        context_parts: list[str] = []
+        if section_key == "core_contribution" and doc.abstract:
+            context_parts.append(doc.abstract[:1600])
+        context_parts.extend(section.content[:1800] for section in chosen_sections[:2])
+        context_parts.extend(chunk.content[:1400] for chunk in chosen_chunks[:2])
+        context_parts.extend(chunk.content[:1400] for chunk in prioritized_chunks[:3])
+        if not context_parts:
+            context_parts.append(doc.abstract or doc.plain_text[:4000])
+        deduped = list(dict.fromkeys(part.strip() for part in context_parts if part.strip()))
+        return "\n\n".join(deduped[:5])
 
     def _heuristic_section(self, doc: ParsedDocument, section_key: str, local_context: str, focus_question: str | None) -> str:
         intro = f"This section is drafted from the locally parsed source material for '{doc.title}'."

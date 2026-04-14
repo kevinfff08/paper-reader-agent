@@ -24,6 +24,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_path(name: str, default: str) -> Path:
     return Path(os.getenv(name, default))
 
@@ -66,6 +73,11 @@ class Settings:
     tavily_api_key: str | None = field(default_factory=lambda: _env_str("TAVILY_API_KEY"))
     session_data_root: Path = field(default_factory=lambda: _env_path("SESSION_DATA_ROOT", "data/sessions"))
     max_parse_chars: int = field(default_factory=lambda: _env_int("MAX_PARSE_CHARS", 120000))
+    docling_enabled: bool = field(default_factory=lambda: _env_bool("DOCLING_ENABLED", True))
+    docling_artifacts_path: Path = field(default_factory=lambda: _env_path("DOCLING_ARTIFACTS_PATH", ".cache/docling"))
+    docling_max_pages: int = field(default_factory=lambda: _env_int("DOCLING_MAX_PAGES", 80))
+    docling_max_file_size_mb: int = field(default_factory=lambda: _env_int("DOCLING_MAX_FILE_SIZE_MB", 50))
+    docling_omp_threads: int = field(default_factory=lambda: _env_int("DOCLING_OMP_THREADS", 4))
     test_mode: bool = field(default_factory=is_test_mode_enabled)
 
 

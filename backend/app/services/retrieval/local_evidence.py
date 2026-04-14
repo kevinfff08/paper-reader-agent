@@ -56,18 +56,29 @@ class LocalEvidenceRetriever:
         query_tokens = Counter(_tokenize(query))
         query_phrase = query.strip().lower()
         scored: list[tuple[float, EvidenceRef]] = []
+        table_bias = self._query_bias(query_tokens, {"table", "ablation", "dataset", "metric", "metrics", "result", "results"})
+        figure_bias = self._query_bias(query_tokens, {"figure", "chart", "diagram", "pipeline", "architecture"})
 
         for doc in parsed_docs:
             for chunk in self._iter_chunks(doc):
                 score = self._score(
                     query_tokens,
-                    text=chunk.content,
+                    text=chunk.rank_text or chunk.content,
                     heading=chunk.heading,
                     query_phrase=query_phrase,
                     source_weight=4.0,
                 )
+                if chunk.chunk_type == "table":
+                    score += table_bias
+                elif chunk.chunk_type == "figure":
+                    score += figure_bias
                 if score <= 0:
                     continue
+                locator = chunk.page_label or chunk.heading
+                if chunk.chunk_type == "table" and chunk.table_refs:
+                    locator = f"{locator} / {chunk.table_refs[0]}" if locator else chunk.table_refs[0]
+                elif chunk.chunk_type == "figure" and chunk.picture_refs:
+                    locator = f"{locator} / {chunk.picture_refs[0]}" if locator else chunk.picture_refs[0]
                 scored.append(
                     (
                         score,
@@ -76,7 +87,7 @@ class LocalEvidenceRetriever:
                             asset_id=doc.paper_id,
                             label=f"{doc.title} - {chunk.heading}",
                             excerpt=chunk.content[:500],
-                            locator=chunk.page_label or chunk.heading,
+                            locator=locator,
                             page_label=chunk.page_label,
                             score=score,
                         ),
@@ -186,6 +197,10 @@ class LocalEvidenceRetriever:
         phrase_bonus = 2.0 if query_phrase and query_phrase in f"{heading} {text}".lower() else 0.0
         return (token_score * source_weight) + (heading_score * (source_weight + 1.5)) + phrase_bonus
 
+    def _query_bias(self, query_tokens: Counter[str], keywords: set[str]) -> float:
+        hits = sum(query_tokens[token] for token in keywords if token in query_tokens)
+        return float(hits * 2.5)
+
     def _iter_chunks(self, doc: ParsedDocument) -> list[ParsedChunk]:
         if doc.chunks:
             return list(doc.chunks)
@@ -208,6 +223,10 @@ class LocalEvidenceRetriever:
                         chunk_id=f"lazy-{section_index + 1}-{chunk_index + 1}",
                         heading=section.heading,
                         content=chunk_text,
+                        section_path=section.section_path or section.heading,
+                        page_start=section.page_start,
+                        page_end=section.page_end,
+                        rank_text=f"{section.section_path or section.heading} {section.heading} {chunk_text}",
                         page_label=section.page_label,
                     )
                 )
