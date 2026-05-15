@@ -29,6 +29,10 @@ import type {
 
 function formatRunEvent(event: RunEvent): string {
   switch (event.event_type) {
+    case "assistant_delta": {
+      const delta = String(event.payload.delta ?? "").replace(/\s+/g, " ").trim();
+      return delta ? `Delta: ${delta.slice(0, 180)}` : "Delta received";
+    }
     case "run_started":
       return `Started ${String(event.payload.mode ?? "run")} mode`;
     case "tool_call_started":

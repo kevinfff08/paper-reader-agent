@@ -350,6 +350,16 @@ data/sessions/_library/
 └─ cards.json
 ```
 
+常用排查文件：
+
+- 主运行事件：`data/sessions/<session>/runs/<run_id>.events.jsonl`
+- 后台任务事件：`data/sessions/<session>/tasks/<task_id>.events.jsonl`
+- 当前 run 状态：`data/sessions/<session>/runs/<run_id>.json`
+- 分析结果索引：`data/sessions/<session>/analysis_index.json`
+- 分析 Markdown：`data/sessions/<session>/analysis/<analysis_id>.md`
+- 解析后的论文 Markdown：`data/sessions/<session>/parsed/<paper_id>.md`
+- session 级日志：`data/sessions/<session>/logs/<session_slug>.log`
+
 ## 八、环境准备
 
 ### 1. Python

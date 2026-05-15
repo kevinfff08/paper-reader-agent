@@ -223,6 +223,7 @@ describe("WorkspaceScreen", () => {
 
     expect(await screen.findByText("Active Runtime")).toBeInTheDocument();
     expect((await screen.findAllByText("Streaming output")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("Delta: Streaming output")).toBeInTheDocument();
     expect(await screen.findByText("run_started")).toBeInTheDocument();
     expect(await screen.findByText("run_completed")).toBeInTheDocument();
     await waitFor(() => expect(source.closed).toBe(true));

@@ -109,7 +109,11 @@ class RunEngine:
                 yield f"data: {payload}\n\n"
                 sent += 1
             run = self.store.get_run(session_id, run_id)
-            if run.status in TERMINAL_RUN_STATES and sent >= len(events):
+            saw_terminal_event = any(
+                event.event_type in {"run_completed", "run_failed"}
+                for event in events
+            )
+            if run.status in TERMINAL_RUN_STATES and sent >= len(events) and saw_terminal_event:
                 break
             await asyncio.sleep(0.1)
 
@@ -166,12 +170,18 @@ class RunEngine:
         session = self.store.get_session(run.session_id)
         docs, sequence_number = self._parse_all_papers(run, sequence_number)
         analyses = [self._analyze_paper(session, doc, run.input_text or None) for doc in docs]
-        synthesis = self._build_cross_paper_synthesis(session, docs, analyses, run.input_text or None)
-        self.store.save_analysis(run.session_id, synthesis)
-        self._update_memory_from_analysis(session, docs, synthesis)
-        self._append_compact_summary(run.session_id, f"analyze:{synthesis.analysis_id}", synthesis.sections[0].content)
-        self._save_library_cards_for_analysis(run.session_id, docs, synthesis)
-        summary_text = "\n\n".join(section.content for section in synthesis.sections[:2])
+        final_analysis = analyses[0]
+        if len(analyses) > 1:
+            final_analysis = self._build_cross_paper_synthesis(session, docs, analyses, run.input_text or None)
+            self.store.save_analysis(run.session_id, final_analysis)
+        self._update_memory_from_analysis(session, docs, final_analysis)
+        self._append_compact_summary(
+            run.session_id,
+            f"analyze:{final_analysis.analysis_id}",
+            final_analysis.sections[0].content,
+        )
+        self._save_library_cards_for_analysis(run.session_id, docs, final_analysis)
+        summary_text = "\n\n".join(section.content for section in final_analysis.sections[:2])
         sequence_number = self._emit_text(run, sequence_number, summary_text)
         sequence_number = self._emit(run, sequence_number, "memory_updated", {"layer": "working_memory"})
         if self.task_engine is not None:
@@ -181,7 +191,7 @@ class RunEngine:
                 active_question=run.input_text or "Initial analysis",
                 unresolved_items=[],
                 evidence=[],
-                preserved_tail=[section.content[:160] for section in synthesis.sections[:2]],
+                preserved_tail=[section.content[:160] for section in final_analysis.sections[:2]],
             )
             memory_task = self.task_engine.start_task(
                 run.session_id,
@@ -198,7 +208,7 @@ class RunEngine:
                 snapshot=snapshot,
             )
             run = self._attach_task_to_run(run, memory_task.task_id, extraction_task.task_id)
-        return f"analysis:{synthesis.analysis_id}", sequence_number
+        return f"analysis:{final_analysis.analysis_id}", sequence_number
 
     def _execute_answer(self, run: RunSummary, sequence_number: int) -> tuple[str, int]:
         session = self.store.get_session(run.session_id)

@@ -41,7 +41,7 @@ def test_session_analysis_question_archive_flow(monkeypatch, isolated_session_ro
         json={"focus_question": "What is the core method?"},
     )
     assert analyze_response.status_code == 200
-    assert analyze_response.json()["analysis"]["title"] == "Cross-Paper Synthesis"
+    assert analyze_response.json()["analysis"]["title"].startswith("Single-Paper Analysis:")
 
     run_response = client.post(
         f"/sessions/{session_id}/runs",
@@ -83,7 +83,7 @@ def test_session_analysis_question_archive_flow(monkeypatch, isolated_session_ro
     assert detail_response.status_code == 200
     payload = detail_response.json()
     assert payload["artifacts"]["archive"]["markdown_path"].endswith("archive.md")
-    assert len(payload["artifacts"]["analyses"]) >= 2
+    assert len(payload["artifacts"]["analyses"]) >= 1
     assert payload["artifacts"]["runs"]
     assert payload["artifacts"]["compact_summaries"]
     assert payload["artifacts"]["tasks"]
