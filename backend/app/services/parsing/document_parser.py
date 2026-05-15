@@ -62,6 +62,7 @@ class DocumentParser:
         max_chars: int = 120000,
         *,
         docling_enabled: bool = True,
+        docling_ocr_enabled: bool = True,
         docling_artifacts_path: Path | None = None,
         docling_max_pages: int = 80,
         docling_max_file_size_mb: int = 50,
@@ -69,6 +70,7 @@ class DocumentParser:
     ):
         self.max_chars = max_chars
         self.docling_enabled = docling_enabled
+        self.docling_ocr_enabled = docling_ocr_enabled
         self.docling_artifacts_path = docling_artifacts_path
         self.docling_max_pages = docling_max_pages
         self.docling_max_file_size_mb = docling_max_file_size_mb
@@ -92,6 +94,7 @@ class DocumentParser:
             "mtime_ns": stats.st_mtime_ns,
             "max_chars": self.max_chars,
             "docling_enabled": self.docling_enabled,
+            "docling_ocr_enabled": self.docling_ocr_enabled,
             "docling_max_pages": self.docling_max_pages,
             "docling_max_file_size_mb": self.docling_max_file_size_mb,
             "docling_omp_threads": self.docling_omp_threads,
@@ -257,7 +260,7 @@ class DocumentParser:
         pipeline_options = PdfPipelineOptions()
         option_values = {
             "do_table_structure": True,
-            "do_ocr": True,
+            "do_ocr": self.docling_ocr_enabled,
             "do_picture_classification": False,
             "do_picture_description": False,
             "generate_page_images": False,
@@ -281,6 +284,7 @@ class DocumentParser:
     def _parser_config_summary(self) -> dict[str, str]:
         return {
             "docling_enabled": str(self.docling_enabled),
+            "docling_ocr_enabled": str(self.docling_ocr_enabled),
             "docling_max_pages": str(self.docling_max_pages),
             "docling_max_file_size_mb": str(self.docling_max_file_size_mb),
             "docling_omp_threads": str(self.docling_omp_threads),

@@ -74,6 +74,7 @@ class Settings:
     session_data_root: Path = field(default_factory=lambda: _env_path("SESSION_DATA_ROOT", "data/sessions"))
     max_parse_chars: int = field(default_factory=lambda: _env_int("MAX_PARSE_CHARS", 120000))
     docling_enabled: bool = field(default_factory=lambda: _env_bool("DOCLING_ENABLED", True))
+    docling_ocr_enabled: bool = field(default_factory=lambda: _env_bool("DOCLING_OCR_ENABLED", True))
     docling_artifacts_path: Path = field(default_factory=lambda: _env_path("DOCLING_ARTIFACTS_PATH", ".cache/docling"))
     docling_max_pages: int = field(default_factory=lambda: _env_int("DOCLING_MAX_PAGES", 80))
     docling_max_file_size_mb: int = field(default_factory=lambda: _env_int("DOCLING_MAX_FILE_SIZE_MB", 50))

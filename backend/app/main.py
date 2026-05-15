@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
         parser=DocumentParser(
             max_chars=settings.max_parse_chars,
             docling_enabled=settings.docling_enabled,
+            docling_ocr_enabled=settings.docling_ocr_enabled,
             docling_artifacts_path=settings.docling_artifacts_path,
             docling_max_pages=settings.docling_max_pages,
             docling_max_file_size_mb=settings.docling_max_file_size_mb,

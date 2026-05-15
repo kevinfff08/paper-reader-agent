@@ -397,6 +397,7 @@ copy .env.example .env
 - `SESSION_DATA_ROOT`
 - `MAX_PARSE_CHARS`
 - `DOCLING_ENABLED`
+- `DOCLING_OCR_ENABLED`
 - `DOCLING_ARTIFACTS_PATH`
 - `DOCLING_MAX_PAGES`
 - `DOCLING_MAX_FILE_SIZE_MB`
@@ -411,6 +412,7 @@ copy .env.example .env
 如果你要实际解析 PDF，还需要注意两点：
 
 - `Docling` 默认标准 pipeline 会启用 OCR 和表格结构识别，首次运行可能下载模型 artifacts
+- 对于文字型 PDF，可以设置 `DOCLING_OCR_ENABLED=0` 关闭 OCR，避免初始化 RapidOCR 模型
 - 离线或受限网络环境下，建议提前把 artifacts 预下载到 `DOCLING_ARTIFACTS_PATH`，否则第一次 PDF 解析可能失败
 
 ## 九、快速开始

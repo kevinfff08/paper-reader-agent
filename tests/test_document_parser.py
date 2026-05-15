@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -101,3 +103,56 @@ def test_document_parser_surfaces_docling_artifact_hint(monkeypatch, isolated_se
 
     with pytest.raises(RuntimeError, match="Pre-download the OCR artifacts"):
         parser.parse("paper-1", pdf_path, parsed_dir=isolated_session_root / "parsed")
+
+
+def test_document_parser_can_disable_docling_ocr(monkeypatch, isolated_session_root: Path) -> None:
+    class FakeInputFormat:
+        PDF = "pdf"
+
+    class FakePdfPipelineOptions:
+        def __init__(self) -> None:
+            self.do_table_structure = None
+            self.do_ocr = None
+            self.do_picture_classification = None
+            self.do_picture_description = None
+            self.generate_page_images = None
+            self.generate_picture_images = None
+            self.enable_remote_services = None
+            self.artifacts_path = None
+
+    class FakePdfFormatOption:
+        def __init__(self, pipeline_options: FakePdfPipelineOptions) -> None:
+            self.pipeline_options = pipeline_options
+
+    class FakeDocumentConverter:
+        def __init__(self, allowed_formats: list[str], format_options: dict[str, FakePdfFormatOption]) -> None:
+            self.allowed_formats = allowed_formats
+            self.format_options = format_options
+
+    docling_module = types.ModuleType("docling")
+    datamodel_module = types.ModuleType("docling.datamodel")
+    base_models_module = types.ModuleType("docling.datamodel.base_models")
+    pipeline_options_module = types.ModuleType("docling.datamodel.pipeline_options")
+    document_converter_module = types.ModuleType("docling.document_converter")
+    base_models_module.InputFormat = FakeInputFormat
+    pipeline_options_module.PdfPipelineOptions = FakePdfPipelineOptions
+    document_converter_module.DocumentConverter = FakeDocumentConverter
+    document_converter_module.PdfFormatOption = FakePdfFormatOption
+
+    monkeypatch.setitem(sys.modules, "docling", docling_module)
+    monkeypatch.setitem(sys.modules, "docling.datamodel", datamodel_module)
+    monkeypatch.setitem(sys.modules, "docling.datamodel.base_models", base_models_module)
+    monkeypatch.setitem(sys.modules, "docling.datamodel.pipeline_options", pipeline_options_module)
+    monkeypatch.setitem(sys.modules, "docling.document_converter", document_converter_module)
+
+    parser = DocumentParser(
+        docling_enabled=True,
+        docling_ocr_enabled=False,
+        docling_artifacts_path=isolated_session_root / ".cache" / "docling",
+    )
+
+    converter = parser._get_docling_converter()
+    pipeline_options = converter.format_options[FakeInputFormat.PDF].pipeline_options
+
+    assert pipeline_options.do_ocr is False
+    assert pipeline_options.artifacts_path == str(isolated_session_root / ".cache" / "docling")
