@@ -7,11 +7,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+_QUOTE_PAIRS = {
+    ("'", "'"),
+    ('"', '"'),
+    (chr(0x201C), chr(0x201D)),
+    (chr(0x2018), chr(0x2019)),
+}
+
+
 def _env_str(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name)
     if value is None:
         return default
-    return value or default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    if len(stripped) >= 2 and (stripped[0], stripped[-1]) in _QUOTE_PAIRS:
+        stripped = stripped[1:-1].strip()
+    return stripped or default
 
 
 def _env_int(name: str, default: int) -> int:
@@ -79,6 +92,8 @@ class Settings:
     docling_max_pages: int = field(default_factory=lambda: _env_int("DOCLING_MAX_PAGES", 80))
     docling_max_file_size_mb: int = field(default_factory=lambda: _env_int("DOCLING_MAX_FILE_SIZE_MB", 50))
     docling_omp_threads: int = field(default_factory=lambda: _env_int("DOCLING_OMP_THREADS", 4))
+    docling_batch_size: int = field(default_factory=lambda: _env_int("DOCLING_BATCH_SIZE", 1))
+    docling_device: str = field(default_factory=lambda: _env_str("DOCLING_DEVICE", "auto") or "auto")
     test_mode: bool = field(default_factory=is_test_mode_enabled)
 
 

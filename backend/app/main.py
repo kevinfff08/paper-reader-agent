@@ -45,6 +45,8 @@ def create_app() -> FastAPI:
             docling_max_pages=settings.docling_max_pages,
             docling_max_file_size_mb=settings.docling_max_file_size_mb,
             docling_omp_threads=settings.docling_omp_threads,
+            docling_batch_size=settings.docling_batch_size,
+            docling_device=settings.docling_device,
         ),
         llm_client=llm_client,
         local_retriever=LocalEvidenceRetriever(),

@@ -67,6 +67,8 @@ class DocumentParser:
         docling_max_pages: int = 80,
         docling_max_file_size_mb: int = 50,
         docling_omp_threads: int = 4,
+        docling_batch_size: int = 1,
+        docling_device: str = "auto",
     ):
         self.max_chars = max_chars
         self.docling_enabled = docling_enabled
@@ -75,6 +77,8 @@ class DocumentParser:
         self.docling_max_pages = docling_max_pages
         self.docling_max_file_size_mb = docling_max_file_size_mb
         self.docling_omp_threads = docling_omp_threads
+        self.docling_batch_size = max(1, docling_batch_size)
+        self.docling_device = docling_device
         self._docling_converter: Any | None = None
 
     def parse(self, paper_id: str, file_path: Path, *, parsed_dir: Path | None = None) -> ParsedDocument:
@@ -98,6 +102,8 @@ class DocumentParser:
             "docling_max_pages": self.docling_max_pages,
             "docling_max_file_size_mb": self.docling_max_file_size_mb,
             "docling_omp_threads": self.docling_omp_threads,
+            "docling_batch_size": self.docling_batch_size,
+            "docling_device": self.docling_device,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -212,7 +218,7 @@ class DocumentParser:
 
         converter = self._get_docling_converter()
         try:
-            conversion_result = converter.convert(file_path)
+            conversion_result = converter.convert(file_path, max_num_pages=self.docling_max_pages)
         except Exception as exc:
             message = str(exc)
             if any(token in message.lower() for token in ("rapidocr", "download", "modelscope", "proxyerror")):
@@ -266,10 +272,18 @@ class DocumentParser:
             "generate_page_images": False,
             "generate_picture_images": False,
             "enable_remote_services": False,
+            "ocr_batch_size": self.docling_batch_size,
+            "layout_batch_size": self.docling_batch_size,
+            "table_batch_size": self.docling_batch_size,
         }
         for option_name, option_value in option_values.items():
             if hasattr(pipeline_options, option_name):
                 setattr(pipeline_options, option_name, option_value)
+        accelerator_options = getattr(pipeline_options, "accelerator_options", None)
+        if accelerator_options is not None and hasattr(accelerator_options, "num_threads"):
+            accelerator_options.num_threads = self.docling_omp_threads
+        if accelerator_options is not None and hasattr(accelerator_options, "device"):
+            accelerator_options.device = self.docling_device
         if self.docling_artifacts_path is not None:
             self.docling_artifacts_path.mkdir(parents=True, exist_ok=True)
             if hasattr(pipeline_options, "artifacts_path"):
@@ -288,6 +302,8 @@ class DocumentParser:
             "docling_max_pages": str(self.docling_max_pages),
             "docling_max_file_size_mb": str(self.docling_max_file_size_mb),
             "docling_omp_threads": str(self.docling_omp_threads),
+            "docling_batch_size": str(self.docling_batch_size),
+            "docling_device": self.docling_device,
             "parser_version": PARSER_VERSION,
         }
 
@@ -304,6 +320,12 @@ class DocumentParser:
             )
 
     def _try_read_pdf_page_count(self, file_path: Path) -> int | None:
+        try:
+            import pypdfium2 as pdfium  # type: ignore
+
+            return len(pdfium.PdfDocument(str(file_path)))
+        except Exception:
+            pass
         try:
             from pypdf import PdfReader  # type: ignore
 

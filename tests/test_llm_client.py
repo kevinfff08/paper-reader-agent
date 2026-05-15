@@ -55,3 +55,29 @@ def test_stream_chat_falls_back_for_claude(monkeypatch) -> None:
 
     events = list(client.stream_chat([{"role": "user", "content": "Hi"}]))
     assert events == [{"type": "text_delta", "delta": "Fallback text"}]
+
+
+def test_proxy_unknown_model_error_is_not_retried(monkeypatch) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(502, json={"error": {"message": "unknown provider for model gpt-5.5"}})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.Client
+
+    def patched_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", patched_client)
+    client = LLMClient(provider="openai", mode="setup-token", base_url="http://localhost:8317", model="gpt-5.5")
+
+    try:
+        client.generate("Hi")
+    except httpx.HTTPStatusError:
+        pass
+
+    assert calls == 1

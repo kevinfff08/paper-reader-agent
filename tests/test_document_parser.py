@@ -96,7 +96,7 @@ def test_document_parser_surfaces_docling_artifact_hint(monkeypatch, isolated_se
     )
 
     class BrokenConverter:
-        def convert(self, _file_path: Path) -> None:
+        def convert(self, _file_path: Path, **_kwargs: object) -> None:
             raise RuntimeError("RapidOCR download failed from modelscope")
 
     monkeypatch.setattr(parser, "_get_docling_converter", lambda: BrokenConverter())
@@ -119,6 +119,10 @@ def test_document_parser_can_disable_docling_ocr(monkeypatch, isolated_session_r
             self.generate_picture_images = None
             self.enable_remote_services = None
             self.artifacts_path = None
+            self.accelerator_options = types.SimpleNamespace(num_threads=None, device=None)
+            self.ocr_batch_size = None
+            self.layout_batch_size = None
+            self.table_batch_size = None
 
     class FakePdfFormatOption:
         def __init__(self, pipeline_options: FakePdfPipelineOptions) -> None:
@@ -149,6 +153,9 @@ def test_document_parser_can_disable_docling_ocr(monkeypatch, isolated_session_r
         docling_enabled=True,
         docling_ocr_enabled=False,
         docling_artifacts_path=isolated_session_root / ".cache" / "docling",
+        docling_omp_threads=2,
+        docling_batch_size=3,
+        docling_device="cuda:0",
     )
 
     converter = parser._get_docling_converter()
@@ -156,3 +163,8 @@ def test_document_parser_can_disable_docling_ocr(monkeypatch, isolated_session_r
 
     assert pipeline_options.do_ocr is False
     assert pipeline_options.artifacts_path == str(isolated_session_root / ".cache" / "docling")
+    assert pipeline_options.accelerator_options.num_threads == 2
+    assert pipeline_options.accelerator_options.device == "cuda:0"
+    assert pipeline_options.ocr_batch_size == 3
+    assert pipeline_options.layout_batch_size == 3
+    assert pipeline_options.table_batch_size == 3

@@ -402,6 +402,8 @@ copy .env.example .env
 - `DOCLING_MAX_PAGES`
 - `DOCLING_MAX_FILE_SIZE_MB`
 - `DOCLING_OMP_THREADS`
+- `DOCLING_BATCH_SIZE`
+- `DOCLING_DEVICE`
 
 如果你使用 CLIProxy 或其他 OpenAI-compatible 代理，重点关注：
 
@@ -413,6 +415,8 @@ copy .env.example .env
 
 - `Docling` 默认标准 pipeline 会启用 OCR 和表格结构识别，首次运行可能下载模型 artifacts
 - 对于文字型 PDF，可以设置 `DOCLING_OCR_ENABLED=0` 关闭 OCR，避免初始化 RapidOCR 模型
+- CPU/内存紧张时，设置 `DOCLING_OMP_THREADS=1` 和 `DOCLING_BATCH_SIZE=1` 可以降低 Docling 解析长 PDF 时的峰值内存
+- `DOCLING_DEVICE=auto` 会让 Docling 自动选择可用加速设备；如果已安装 CUDA 版 PyTorch，可设为 `cuda` 或 `cuda:0`
 - 离线或受限网络环境下，建议提前把 artifacts 预下载到 `DOCLING_ARTIFACTS_PATH`，否则第一次 PDF 解析可能失败
 
 ## 九、快速开始

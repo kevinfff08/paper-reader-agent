@@ -17,6 +17,12 @@ logger = get_app_logger("llm")
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _CLAUDE_BASE_URL = "https://api.anthropic.com/v1"
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
+_NON_RETRYABLE_ERROR_MARKERS = (
+    "unknown provider for model",
+    "model_not_found",
+    "invalid model",
+    "model does not exist",
+)
 
 
 def normalize_openai_base_url(base_url: str) -> str:
@@ -89,7 +95,7 @@ class LLMClient:
                 return result
             except httpx.HTTPStatusError as exc:
                 last_error = exc
-                if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+                if not self._is_retryable_status_error(exc):
                     raise
                 time.sleep(2 ** attempt)
 
@@ -247,6 +253,13 @@ class LLMClient:
             max_tokens=max_tokens,
         )
         return json.loads(response)
+
+    @staticmethod
+    def _is_retryable_status_error(exc: httpx.HTTPStatusError) -> bool:
+        if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+            return False
+        body = exc.response.text.lower()
+        return not any(marker in body for marker in _NON_RETRYABLE_ERROR_MARKERS)
 
     @staticmethod
     def _messages_to_prompt(messages: list[dict[str, Any]]) -> str:
