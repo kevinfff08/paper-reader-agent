@@ -32,6 +32,7 @@ Thumbs.db
 .vscode/
 .idea/
 .trae/
+.claude
 
 # Docs
 docs
