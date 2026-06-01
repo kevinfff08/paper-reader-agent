@@ -81,4 +81,19 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> FastAPI:
+    """Lazily build the ASGI app on first access.
+
+    ``uvicorn backend.app.main:app`` resolves ``app`` through this hook, while
+    merely importing the module (e.g. to grab ``create_app`` in tests) no longer
+    triggers app construction and its session-root safety checks.
+    """
+    if name == "app":
+        global _app
+        if _app is None:
+            _app = create_app()
+        return _app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
