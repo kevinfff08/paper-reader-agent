@@ -223,9 +223,11 @@ describe("WorkspaceScreen", () => {
 
     expect(await screen.findByText("Active Runtime")).toBeInTheDocument();
     expect((await screen.findAllByText("Streaming output")).length).toBeGreaterThan(0);
-    expect(await screen.findByText("Delta: Streaming output")).toBeInTheDocument();
-    expect(await screen.findByText("run_started")).toBeInTheDocument();
-    expect(await screen.findByText("run_completed")).toBeInTheDocument();
+    // Token-level deltas are filtered out of the runtime feed; only lifecycle
+    // events are shown with human-readable titles.
+    expect(screen.queryByText("Delta: Streaming output")).not.toBeInTheDocument();
+    expect(await screen.findByText("Run started")).toBeInTheDocument();
+    expect(await screen.findByText("Run completed")).toBeInTheDocument();
     await waitFor(() => expect(source.closed).toBe(true));
   });
 

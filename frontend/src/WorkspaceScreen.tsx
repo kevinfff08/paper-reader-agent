@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "./Markdown";
 import {
   createRun,
   createSession,
@@ -27,30 +28,114 @@ import type {
 } from "./types";
 
 
-function formatRunEvent(event: RunEvent): string {
+type RunEventMeta = {
+  icon: string;
+  title: string;
+  detail: string | null;
+  tone: "neutral" | "active" | "success" | "danger";
+};
+
+// Human-readable presentation for the runtime timeline. `assistant_delta`
+// events are intentionally not handled here: they are token-level streaming
+// chunks and are filtered out of the feed (the streamed text is shown in full
+// in the analysis panel instead).
+function describeRunEvent(event: RunEvent): RunEventMeta {
   switch (event.event_type) {
-    case "assistant_delta": {
-      const delta = String(event.payload.delta ?? "").replace(/\s+/g, " ").trim();
-      return delta ? `Delta: ${delta.slice(0, 180)}` : "Delta received";
-    }
     case "run_started":
-      return `Started ${String(event.payload.mode ?? "run")} mode`;
+      return { icon: "▶", title: "Run started", detail: `${String(event.payload.mode ?? "run")} mode`, tone: "active" };
     case "tool_call_started":
-      return `Running ${String(event.payload.tool ?? "tool")}`;
+      return { icon: "⚙", title: "Tool started", detail: String(event.payload.tool ?? "tool"), tone: "active" };
     case "tool_call_finished":
-      return `Finished ${String(event.payload.tool ?? "tool")}`;
+      return { icon: "✓", title: "Tool finished", detail: String(event.payload.tool ?? "tool"), tone: "neutral" };
     case "evidence_added":
-      return `Added evidence: ${String(event.payload.label ?? "evidence")}`;
+      return { icon: "❝", title: "Evidence added", detail: String(event.payload.label ?? "evidence"), tone: "neutral" };
     case "verification_required":
-      return `Verification: ${JSON.stringify(event.payload)}`;
+      return { icon: "⚠", title: "Verification requested", detail: String(event.payload.question ?? "review needed"), tone: "active" };
     case "memory_updated":
-      return "Memory layer updated";
+      return { icon: "✎", title: "Memory updated", detail: null, tone: "neutral" };
     case "run_completed":
-      return "Run completed";
+      return { icon: "✔", title: "Run completed", detail: null, tone: "success" };
     case "run_failed":
-      return `Run failed: ${String(event.payload.error ?? "unknown error")}`;
+      return { icon: "✕", title: "Run failed", detail: String(event.payload.error ?? "unknown error"), tone: "danger" };
     default:
-      return event.event_type;
+      return { icon: "•", title: event.event_type.replace(/_/g, " "), detail: null, tone: "neutral" };
+  }
+}
+
+const CATEGORY_META: Record<string, { label: string; icon: string; hint: string }> = {
+  paper: { label: "Papers", icon: "📄", hint: "Uploaded source documents" },
+  parsed: { label: "Parsed Text", icon: "🧩", hint: "Structured text extracted from papers" },
+  analysis: { label: "Analyses", icon: "🧠", hint: "Generated reading analyses" },
+  reference: { label: "References", icon: "🔗", hint: "Localized external references" },
+  memory: { label: "Memory", icon: "💾", hint: "Session memory, notes & summaries" },
+  task: { label: "Tasks", icon: "⚙️", hint: "Background task records" },
+  archive: { label: "Archive", icon: "📦", hint: "Exported session archive" },
+};
+
+const CATEGORY_ORDER = ["paper", "parsed", "analysis", "reference", "memory", "task", "archive"];
+
+const MEMORY_FILE_NAMES: Record<string, string> = {
+  "memory.md": "Session memory",
+  "notes.json": "Verification notes",
+  "summaries.json": "Compaction summaries",
+  "working_state.json": "Working state",
+};
+
+// Stored paper names embed the internal id ("206274018c4d_2605.02087v1"); drop
+// the leading id so the user sees the original document name.
+function cleanPaperName(name: string): string {
+  return name.replace(/^[0-9a-f]{8,}_/i, "");
+}
+
+function fileKindBadge(label: string): string {
+  const ext = label.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf") return "PDF";
+  if (ext === "md") return "Markdown";
+  if (ext === "json") return "JSON";
+  if (ext === "txt") return "Text";
+  return ext.toUpperCase() || "FILE";
+}
+
+type ResolverMaps = {
+  papers: Map<string, string>;
+  analyses: Map<string, string>;
+  references: Map<string, string>;
+  tasks: Map<string, string>;
+};
+
+// Turns an opaque hashed file name (e.g. "206274018c4d.json") into a readable
+// title by resolving the leading asset id against the session artifacts.
+function resolveFileTitle(file: SessionFileEntry, maps: ResolverMaps): string {
+  const stem = file.label.replace(/\.[^.]+$/, "");
+  const leadingId = stem.split("_")[0];
+
+  switch (file.category) {
+    case "paper": {
+      const paper = maps.papers.get(leadingId);
+      const original = stem.includes("_") ? stem.slice(leadingId.length + 1) : null;
+      return cleanPaperName(paper ?? original ?? file.label);
+    }
+    case "parsed": {
+      const paper = maps.papers.get(leadingId) ?? maps.papers.get(stem);
+      return paper ? `Parsed · ${cleanPaperName(paper)}` : "Parsed document";
+    }
+    case "analysis": {
+      const analysis = maps.analyses.get(leadingId) ?? maps.analyses.get(stem);
+      return analysis ? analysis.replace(/[0-9a-f]{8,}_/gi, "") : "Analysis";
+    }
+    case "reference": {
+      return maps.references.get(leadingId) ?? maps.references.get(stem) ?? "Reference";
+    }
+    case "memory":
+      return MEMORY_FILE_NAMES[file.label] ?? stem;
+    case "task": {
+      const kind = maps.tasks.get(leadingId) ?? maps.tasks.get(stem);
+      return kind ? `${kind.replace(/_/g, " ")} task` : "Background task";
+    }
+    case "archive":
+      return "Session archive";
+    default:
+      return file.label;
   }
 }
 
@@ -274,13 +359,16 @@ export default function WorkspaceScreen() {
       runSourceRef.current = source;
       source.onmessage = (message) => {
         const event: RunEvent = JSON.parse(message.data);
-        setRunEvents((current) => [...current, event].slice(-10));
-        if (event.event_type === "run_started") {
-          setActiveRun((current) => current ? { ...current, status: "running" } : current);
-        }
         if (event.event_type === "assistant_delta") {
+          // Token-level chunks accumulate into the streamed text only; they are
+          // intentionally kept out of the lifecycle event feed.
           const delta = String(event.payload.delta ?? "");
           setStreamedText((current) => current + delta);
+        } else {
+          setRunEvents((current) => [...current, event].slice(-12));
+        }
+        if (event.event_type === "run_started") {
+          setActiveRun((current) => current ? { ...current, status: "running" } : current);
         }
         if (event.event_type === "run_completed" || event.event_type === "run_failed") {
           source.close();
@@ -377,6 +465,35 @@ export default function WorkspaceScreen() {
     () => groupFiles(selectedSession?.artifacts.session_files ?? []),
     [selectedSession]
   );
+  const resolverMaps = useMemo<ResolverMaps>(() => {
+    const artifacts = selectedSession?.artifacts;
+    return {
+      papers: new Map(
+        (artifacts?.papers ?? []).map((paper) => [paper.paper_id, paper.title || paper.filename])
+      ),
+      analyses: new Map(
+        (artifacts?.analyses ?? []).map((analysis) => [analysis.analysis_id, analysis.title])
+      ),
+      references: new Map(
+        (artifacts?.references ?? []).map((reference) => [reference.reference_id, reference.title])
+      ),
+      tasks: new Map(
+        (artifacts?.tasks ?? []).map((task) => [task.task_id, task.agent_kind])
+      ),
+    };
+  }, [selectedSession]);
+  const orderedFileCategories = useMemo(() => {
+    const rank = (category: string) => {
+      const position = CATEGORY_ORDER.indexOf(category);
+      return position === -1 ? CATEGORY_ORDER.length : position;
+    };
+    return Object.keys(filesByCategory).sort((a, b) => rank(a) - rank(b));
+  }, [filesByCategory]);
+  const visibleRunEvents = useMemo(
+    () => runEvents.filter((event) => event.event_type !== "assistant_delta"),
+    [runEvents]
+  );
+  const isRunStreaming = latestRunStatus === "running";
   const visibleTasks = selectedSession?.artifacts.tasks ?? [];
   const latestVerification: VerificationNote | undefined = selectedSession?.artifacts.verification_memory[0];
 
@@ -457,19 +574,38 @@ export default function WorkspaceScreen() {
             </section>
             <section className="panel file-manager">
               <h3>Current Session File Manager</h3>
-              {Object.entries(filesByCategory).map(([category, files]) => (
-                <div key={category} className="file-group">
-                  <h4>{category}</h4>
-                  <ul className="plain-list compact-list">
-                    {files.map((file) => (
-                      <li key={file.file_id}>
-                        <strong>{file.label}</strong>
-                        <div className="subtle">{file.path}</div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+              {orderedFileCategories.length === 0 && (
+                <p className="subtle">No files yet. Upload papers to get started.</p>
+              )}
+              {orderedFileCategories.map((category) => {
+                const files = filesByCategory[category];
+                const meta = CATEGORY_META[category] ?? { label: category, icon: "📁", hint: "" };
+                return (
+                  <div key={category} className="file-group">
+                    <div className="file-group-head">
+                      <span className="file-group-icon">{meta.icon}</span>
+                      <div>
+                        <h4>
+                          {meta.label}
+                          <span className="file-count">{files.length}</span>
+                        </h4>
+                        {meta.hint && <p className="file-group-hint">{meta.hint}</p>}
+                      </div>
+                    </div>
+                    <ul className="file-list">
+                      {files.map((file) => (
+                        <li key={file.file_id} className="file-item" title={file.path}>
+                          <span className="file-kind">{fileKindBadge(file.label)}</span>
+                          <div className="file-item-body">
+                            <strong>{resolveFileTitle(file, resolverMaps)}</strong>
+                            <code className="file-name">{file.label}</code>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
             </section>
             <section className="panel">
               <h3>Localized References</h3>
@@ -533,19 +669,30 @@ export default function WorkspaceScreen() {
                   <span>Background tasks: {activeRun.active_background_task_ids.length}</span>
                 </div>
               )}
-              {streamedText && (
-                <div className="stream-preview">
-                  <pre>{streamedText}</pre>
+              {isRunStreaming && (
+                <div className="streaming-indicator">
+                  <span className="streaming-dot" />
+                  Streaming response… see “Current Session Run” below.
                 </div>
               )}
-              <div className="event-list">
-                {runEvents.map((event) => (
-                  <div key={event.event_id} className="event-item">
-                    <strong>{event.event_type}</strong>
-                    <span>{formatRunEvent(event)}</span>
-                  </div>
-                ))}
-              </div>
+              {visibleRunEvents.length === 0 ? (
+                <p className="subtle">Run events will appear here.</p>
+              ) : (
+                <div className="event-feed">
+                  {visibleRunEvents.map((event) => {
+                    const meta = describeRunEvent(event);
+                    return (
+                      <div key={event.event_id} className={`event-row tone-${meta.tone}`}>
+                        <span className="event-icon">{meta.icon}</span>
+                        <div className="event-body">
+                          <strong>{meta.title}</strong>
+                          {meta.detail && <span>{meta.detail}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             <section className="workspace-main-grid">
@@ -563,16 +710,22 @@ export default function WorkspaceScreen() {
                 <h3>Current Session Run</h3>
                 {activeRun?.mode === "analyze" && streamedText ? (
                   <article className="analysis-section">
-                    <h4>Streaming Analysis Draft</h4>
-                    <p>{streamedText}</p>
+                    <div className="analysis-section-head">
+                      <h4>Streaming Analysis Draft</h4>
+                      {isRunStreaming && <span className="streaming-tag">Streaming…</span>}
+                    </div>
+                    <Markdown content={streamedText} />
                   </article>
                 ) : latestAnalysis ? (
-                  latestAnalysis.sections.map((section) => (
-                    <article key={section.key} className="analysis-section">
-                      <h4>{section.title}</h4>
-                      <p>{section.content}</p>
-                    </article>
-                  ))
+                  latestAnalysis.sections.map((section) => {
+                    const startsWithHeading = section.content.trim().startsWith("#");
+                    return (
+                      <article key={section.key} className="analysis-section">
+                        {!startsWithHeading && <h4>{section.title}</h4>}
+                        <Markdown content={section.content} />
+                      </article>
+                    );
+                  })
                 ) : (
                   <p className="subtle">Upload papers and run analysis to populate this workspace.</p>
                 )}
@@ -589,8 +742,11 @@ export default function WorkspaceScreen() {
                 </form>
                 {activeRun?.mode === "answer" && streamedText && (
                   <article className="qa-card streaming-card">
-                    <h4>Streaming Answer</h4>
-                    <p>{streamedText}</p>
+                    <div className="analysis-section-head">
+                      <h4>Streaming Answer</h4>
+                      {isRunStreaming && <span className="streaming-tag">Streaming…</span>}
+                    </div>
+                    <Markdown content={streamedText} />
                   </article>
                 )}
                 {latestVerification && (
@@ -603,7 +759,7 @@ export default function WorkspaceScreen() {
                   {qaRecords.map((record) => (
                     <article key={record.question_id} className="qa-card">
                       <h4>{record.question_text}</h4>
-                      <p>{record.answer_text}</p>
+                      <Markdown content={record.answer_text} />
                       <div className="meta-block">
                         <span>Verification: {record.verification_status}</span>
                         <span>Evidence: {record.evidence_refs.length}</span>
