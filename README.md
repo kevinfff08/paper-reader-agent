@@ -1,6 +1,6 @@
 ﻿# PaperReader
 
-> 面向论文精读场景的本地优先阅读工作台。它不是一次性摘要器，而是一个围绕 `session` 持久化状态构建的论文阅读运行时。
+> 面向论文精读场景的本地优先阅读工作台。它不是一次性摘要器，而是一个围绕 `session` 持久化状态构建的论文阅读运行时。默认以轻量级桌面应用形式运行（原生窗口 + 进程内 FastAPI），也保留浏览器开发模式。
 
 PaperReader 的目标不是“给论文生成一段看起来不错的总结”，而是帮助研究者在同一个会话里持续完成：上传论文、解析原文、生成分析、追问细节、补充相关文献、维护记忆、做高风险核验，并最终沉淀成结构化归档。
 
@@ -29,6 +29,7 @@ PaperReader 针对的是这些问题。它把“读论文”建模为一个持�
 - 文献补充：支持发现相关文献并本地化到当前 session
 - 归档质量提升：`archive` 会直接保留分析结果，同时把问答整理为综合总结，并输出轻量 Markdown 校验警告
 - 持久化任务系统：后台任务有状态、有日志、有进度、可停止、刷新后可恢复
+- 桌面应用形态：通过 `pywebview` 在系统原生 WebView（Windows 上为 Edge WebView2）中加载前端，进程内启动 FastAPI，单端口、单进程、单窗口，工作流与 `data/` 持久化完全不变
 - 前后端测试：覆盖流式事件、任务面板、记忆存储、运行时 API 与测试数据隔离
 
 推荐使用流程:
@@ -45,45 +46,96 @@ PaperReader 针对的是这些问题。它把“读论文”建模为一个持�
 ## 二、系统设计总览
 
 ```mermaid
-flowchart LR
-    U["用户"] --> UI["前端工作台"]
-    UI --> API["FastAPI API / SSE"]
+flowchart TB
+    user(["👤 用户"])
 
-    subgraph RUN["前台主线 RunEngine"]
+    subgraph shell["🖥️ 桌面外壳 · desktop_app.py"]
         direction LR
-        R1["读取当前 session 工作集"] --> R2["session -> run -> iteration"]
-        R2 --> R3{"模型决定下一步"}
-        R3 -->|调用工具| R4["调用工具并接收 observation"]
-        R4 --> R3
-        R3 -->|准备输出| R5["生成回答 / 分析 / 归档片段"]
-        R5 --> R6{"是否满足结束条件"}
-        R6 -->|否，继续 loop| R3
-        R6 -->|是| R7["提交结果并结束 run"]
+        win["pywebview 原生窗口<br/>Edge WebView2"]
+        uvi["进程内 uvicorn<br/>127.0.0.1:8000"]
+        win <--> uvi
     end
 
-    subgraph TASK["后台并行 TaskEngine"]
+    subgraph web["⚡ FastAPI · 单端口 / 单进程"]
+        direction LR
+        static["静态托管<br/>frontend/dist"]
+        rest["REST 接口<br/>/sessions · /papers<br/>/runs · /tasks · /discover"]
+        sse["SSE 事件流<br/>/runs · /tasks /{id}/events"]
+    end
+
+    subgraph run["🔄 前台主运行时 · RunEngine"]
         direction TB
-        T1["运行中后台任务\ncompact / verification"]
-        T2["run 收尾任务\nsession_memory_update / memory_extraction"]
+        mode{{"模式入口<br/>analyze · answer · archive"}}
+        start["start_run → 持久化 run<br/>emit run_started"]
+        loop{"模型决定下一步"}
+        tool["调用工具并接收 observation<br/>本地检索 / 读原文 / 读笔记<br/>读引用 / 外部检索 / 更新记忆"]
+        emit["emit text_delta · tool_call_*<br/>· memory_updated"]
+        gate{"高风险问题<br/>是否放行？"}
+        done["emit run_completed<br/>提交最终产物"]
+        mode --> start --> loop
+        loop -->|"action ≠ finish"| tool --> emit --> loop
+        loop -->|"action = finish"| gate
+        gate -->|通过| done
+        gate -->|未通过| loop
     end
 
-    API --> R1
-    R3 -. "可派生后台任务" .-> T1
-    T1 -. "verification 返回核验结果" .-> R6
-    R7 -. "run 完成后触发" .-> T2
+    subgraph task["🧩 后台运行时 · TaskEngine（持久化 · 可观察 · 可停止）"]
+        direction TB
+        tc["compact<br/>上下文压缩<br/>候选 → 安全边界合并"]
+        tv["verification<br/>高风险证据核验"]
+        tm["session_memory_update<br/>+ memory_extraction"]
+    end
+
+    subgraph store["💾 SessionStore · 本地文件持久化"]
+        direction LR
+        ev["runs · tasks<br/>事件 .jsonl"]
+        mem["五层记忆<br/>working · evidence<br/>compact · library · verification"]
+        art["analysis · qa<br/>archive"]
+    end
+
+    llm["🤖 LLM Client<br/>Provider / CLIProxy<br/>无 key 时确定性回退"]
+
+    user --> win
+    uvi --> static
+    uvi --> rest
+    uvi --> sse
+    rest --> mode
+    run -. 派生运行中任务 .-> tc
+    run -. 派生运行中任务 .-> tv
+    done -. run 收尾触发 .-> tm
+    tv -. 核验结果回流 .-> gate
+    run <--> llm
+    task <--> llm
+    run --> store
+    task --> store
+    store --> sse
+    sse -. 回放 + 续传 .-> win
+
+    classDef userC fill:#f1f5f9,stroke:#475569,color:#0f172a,font-weight:bold
+    classDef shellC fill:#eef2ff,stroke:#6366f1,color:#312e81
+    classDef webC fill:#ecfeff,stroke:#0891b2,color:#0e4f5c
+    classDef runC fill:#fffbeb,stroke:#d97706,color:#7c2d12
+    classDef gateC fill:#fff7ed,stroke:#ea580c,color:#7c2d12,font-weight:bold
+    classDef taskC fill:#f0fdf4,stroke:#16a34a,color:#14532d
+    classDef storeC fill:#fdf4ff,stroke:#c026d3,color:#701a75
+    classDef llmC fill:#fef2f2,stroke:#dc2626,color:#7f1d1d
+
+    class user userC
+    class win,uvi shellC
+    class static,rest,sse webC
+    class mode,start,loop,tool,emit,done runC
+    class gate gateC
+    class tc,tv,tm taskC
+    class ev,mem,art storeC
+    class llm llmC
 ```
 
-上图只画运行机制本身，不把所有基础设施依赖都塞进图里。图里的重点是：
+这张图按四层从上到下展开：**桌面外壳 → FastAPI 单端口服务 → 双运行时（前台 `RunEngine` + 后台 `TaskEngine`）→ `SessionStore` 本地持久化**；`LLM Client` 被两个运行时共享。要点：
 
-- 中间这条链路就是主 agent loop，真正的循环发生在 `模型决定下一步 -> 调工具 -> 回到决定`，以及 `准备输出 -> 是否满足结束条件 -> 回到决定`
-- 右侧后台任务只分成两类：运行中任务与 run 收尾任务，避免把四个 task 全部拉成长线
-- `verification` 属于运行中任务，所以它的结果会回流到“是否满足结束条件”
-
-实际支撑关系是：
-
-- `RunEngine` 和 `TaskEngine` 都会使用 `LLM Client / CLIProxy / Provider`
-- 两者都会把状态、事件、记忆和产物写入 `SessionStore`
-- `SessionStore` 再统一管理多层记忆与 session 文件
+- 中间的环路才是真正的 agent loop：`模型决定下一步 → 调工具 → 回到决定`，一直循环到模型选择 `finish` 才进入放行判定；它不是写死的“解析 → 检索 → 回答”流水线。
+- `answer` 模式下，高风险问题会派生 `verification` 任务，其核验结果回流到“是否放行”；同时 `compact` 任务在后台压缩，结果先作为候选、到安全边界才合并，绝不热替换流式中的状态。
+- `analyze` 完成后派生 `session_memory_update` / `memory_extraction` 收尾任务，把工作记忆与长期记忆沉淀下来。
+- 所有 run / task 的状态、事件、记忆与产物都写入 `SessionStore`；SSE 先**重放**已存事件再**续传**新事件，因此关闭窗口或刷新后仍能恢复与回放。
 
 ### 0.(补充) 论文解析与本地证据
 
@@ -214,7 +266,7 @@ PaperReader 当前维护五层记忆：
 
 ## 四、前端界面结构
 
-前端目前采用三栏工作台：
+前端构建产物由 FastAPI 一并托管（`frontend/dist` 挂载在根路径），日常使用时通过桌面入口 `desktop_app.py` 在原生窗口中加载 `http://127.0.0.1:8000`；前端开发调试时仍可单独运行 Vite dev server。无论哪种形态，界面都采用同一套三栏工作台：
 
 ### 左侧：当前 Session 文件管理
 
@@ -310,7 +362,8 @@ PaperReader/
 ├─ product_spec.md             # 产品规格
 ├─ system_architecture.md      # 系统架构说明
 ├─ pyproject.toml              # Python 项目配置
-├─ start.bat                   # 一键启动前后端
+├─ desktop_app.py              # 桌面应用入口（pywebview + 进程内 uvicorn）
+├─ start.bat                   # 一键启动桌面应用
 └─ run_tests.bat               # 测试入口
 ```
 
@@ -431,30 +484,42 @@ copy .env.example .env
 
 ## 九、快速开始
 
-### 方式一：直接启动
+### 方式一：一键启动桌面应用（推荐）
 
 ```bat
 start.bat
 ```
 
-默认地址：
+`start.bat` 会激活 conda 环境、按需启动 CLIProxyAPI、构建前端，最后运行 `desktop_app.py`：进程内拉起 FastAPI（`http://127.0.0.1:8000`），并在原生窗口中加载工作台。关闭窗口即退出整个应用。
 
-- Backend: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5173`
+> 说明：`start.bat` 默认**每次启动都会重新构建前端**（`frontend` 很小，构建很快），以避免前端改动后窗口仍加载旧产物。若确认 `dist` 已是最新，可设 `PAPERREADER_SKIP_BUILD=1` 跳过构建。
+>
+> Windows 运行时依赖：桌面窗口基于系统 **Edge WebView2**（Win11 通常已预装），并通过 `pythonnet` 加载（已在 `pyproject.toml` 中声明，`pip install -e .` 会一并安装）。
 
-### 方式二：手动启动
-
-后端：
+也可以在已激活环境后直接运行：
 
 ```bash
-uvicorn backend.app.main:app --reload
+python desktop_app.py
 ```
 
-前端：
+### 方式二：浏览器开发模式
+
+适合调试前端（热更新）。后端仍由桌面入口在同一端口内拉起，前端单独跑 Vite dev server：
 
 ```bash
+# 终端 1：启动后端 + 一个指向 5173 的窗口
+python desktop_app.py --dev
+
+# 终端 2：启动前端热更新（http://127.0.0.1:5173）
 cd frontend
 npm run dev
+```
+
+若只想要纯浏览器调试而不开窗口，也可手动分别启动：
+
+```bash
+uvicorn backend.app.main:app --reload   # 后端
+cd frontend && npm run dev              # 前端，浏览器访问 http://127.0.0.1:5173
 ```
 
 ## 十、测试
@@ -463,7 +528,7 @@ npm run dev
 
 ```bash
 conda activate research_tools
-C:\Users\kevin\anaconda3\envs\research_tools\python.exe -m pytest tests -q
+python -m pytest tests -q
 ```
 
 或直接：
@@ -490,4 +555,4 @@ npm run test
 
 ## 十一、License
 
-本仓库使用 `MIT License`，完整文本见根目录 [LICENSE](/D:/Kevin/PhD/Project/ResearchTools/PaperReader/LICENSE)。
+本仓库使用 `MIT License`，完整文本见根目录 [LICENSE](LICENSE)。
