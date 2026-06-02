@@ -439,7 +439,11 @@ copy .env.example .env
 start.bat
 ```
 
-`start.bat` 会激活 conda 环境、按需启动 CLIProxyAPI、在 `frontend/dist` 缺失时自动构建前端，最后运行 `desktop_app.py`：进程内拉起 FastAPI（`http://127.0.0.1:8000`），并在原生窗口中加载工作台。关闭窗口即退出整个应用。
+`start.bat` 会激活 conda 环境、按需启动 CLIProxyAPI、构建前端，最后运行 `desktop_app.py`：进程内拉起 FastAPI（`http://127.0.0.1:8000`），并在原生窗口中加载工作台。关闭窗口即退出整个应用。
+
+> 说明：`start.bat` 默认**每次启动都会重新构建前端**（`frontend` 很小，构建很快），以避免前端改动后窗口仍加载旧产物。若确认 `dist` 已是最新，可设 `PAPERREADER_SKIP_BUILD=1` 跳过构建。
+>
+> Windows 运行时依赖：桌面窗口基于系统 **Edge WebView2**（Win11 通常已预装），并通过 `pythonnet` 加载（已在 `pyproject.toml` 中声明，`pip install -e .` 会一并安装）。
 
 也可以在已激活环境后直接运行：
 

@@ -75,21 +75,26 @@ if /I "%LLM_MODE%"=="setup-token" (
     echo.
 )
 
-REM --- Ensure frontend build exists (desktop app serves frontend/dist) ---
-if not exist "%ROOT%frontend\dist\index.html" (
-    echo [BUILD] frontend\dist not found. Building frontend ...
-    pushd "%ROOT%frontend"
+REM --- Build frontend (desktop app serves frontend/dist) ---
+REM Always rebuild so the window never serves a stale bundle after frontend edits.
+REM Set PAPERREADER_SKIP_BUILD=1 to skip when you know dist is already current.
+pushd "%ROOT%frontend"
+if not exist "node_modules" (
+    echo [BUILD] Installing frontend dependencies ...
     call npm install
-    call npm run build
-    popd
-    if not exist "%ROOT%frontend\dist\index.html" (
-        echo [ERROR] Frontend build failed. Please check npm output above.
-        pause
-        exit /b 1
-    )
-    echo [OK] Frontend built.
-    echo.
 )
+if /I not "%PAPERREADER_SKIP_BUILD%"=="1" (
+    echo [BUILD] Building frontend ...
+    call npm run build
+)
+popd
+if not exist "%ROOT%frontend\dist\index.html" (
+    echo [ERROR] Frontend build output not found. Please check npm output above.
+    pause
+    exit /b 1
+)
+echo [OK] Frontend ready.
+echo.
 
 REM --- Launch the desktop app (in-process FastAPI + native WebView window) ---
 echo PaperReader is starting as a desktop app ...
