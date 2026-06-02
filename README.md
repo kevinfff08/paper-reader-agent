@@ -46,45 +46,96 @@ PaperReader 针对的是这些问题。它把“读论文”建模为一个持�
 ## 二、系统设计总览
 
 ```mermaid
-flowchart LR
-    U["用户"] --> UI["前端工作台"]
-    UI --> API["FastAPI API / SSE"]
+flowchart TB
+    user(["👤 用户"])
 
-    subgraph RUN["前台主线 RunEngine"]
+    subgraph shell["🖥️ 桌面外壳 · desktop_app.py"]
         direction LR
-        R1["读取当前 session 工作集"] --> R2["session -> run -> iteration"]
-        R2 --> R3{"模型决定下一步"}
-        R3 -->|调用工具| R4["调用工具并接收 observation"]
-        R4 --> R3
-        R3 -->|准备输出| R5["生成回答 / 分析 / 归档片段"]
-        R5 --> R6{"是否满足结束条件"}
-        R6 -->|否，继续 loop| R3
-        R6 -->|是| R7["提交结果并结束 run"]
+        win["pywebview 原生窗口<br/>Edge WebView2"]
+        uvi["进程内 uvicorn<br/>127.0.0.1:8000"]
+        win <--> uvi
     end
 
-    subgraph TASK["后台并行 TaskEngine"]
+    subgraph web["⚡ FastAPI · 单端口 / 单进程"]
+        direction LR
+        static["静态托管<br/>frontend/dist"]
+        rest["REST 接口<br/>/sessions · /papers<br/>/runs · /tasks · /discover"]
+        sse["SSE 事件流<br/>/runs · /tasks /{id}/events"]
+    end
+
+    subgraph run["🔄 前台主运行时 · RunEngine"]
         direction TB
-        T1["运行中后台任务\ncompact / verification"]
-        T2["run 收尾任务\nsession_memory_update / memory_extraction"]
+        mode{{"模式入口<br/>analyze · answer · archive"}}
+        start["start_run → 持久化 run<br/>emit run_started"]
+        loop{"模型决定下一步"}
+        tool["调用工具并接收 observation<br/>本地检索 / 读原文 / 读笔记<br/>读引用 / 外部检索 / 更新记忆"]
+        emit["emit text_delta · tool_call_*<br/>· memory_updated"]
+        gate{"高风险问题<br/>是否放行？"}
+        done["emit run_completed<br/>提交最终产物"]
+        mode --> start --> loop
+        loop -->|"action ≠ finish"| tool --> emit --> loop
+        loop -->|"action = finish"| gate
+        gate -->|通过| done
+        gate -->|未通过| loop
     end
 
-    API --> R1
-    R3 -. "可派生后台任务" .-> T1
-    T1 -. "verification 返回核验结果" .-> R6
-    R7 -. "run 完成后触发" .-> T2
+    subgraph task["🧩 后台运行时 · TaskEngine（持久化 · 可观察 · 可停止）"]
+        direction TB
+        tc["compact<br/>上下文压缩<br/>候选 → 安全边界合并"]
+        tv["verification<br/>高风险证据核验"]
+        tm["session_memory_update<br/>+ memory_extraction"]
+    end
+
+    subgraph store["💾 SessionStore · 本地文件持久化"]
+        direction LR
+        ev["runs · tasks<br/>事件 .jsonl"]
+        mem["五层记忆<br/>working · evidence<br/>compact · library · verification"]
+        art["analysis · qa<br/>archive"]
+    end
+
+    llm["🤖 LLM Client<br/>Provider / CLIProxy<br/>无 key 时确定性回退"]
+
+    user --> win
+    uvi --> static
+    uvi --> rest
+    uvi --> sse
+    rest --> mode
+    run -. 派生运行中任务 .-> tc
+    run -. 派生运行中任务 .-> tv
+    done -. run 收尾触发 .-> tm
+    tv -. 核验结果回流 .-> gate
+    run <--> llm
+    task <--> llm
+    run --> store
+    task --> store
+    store --> sse
+    sse -. 回放 + 续传 .-> win
+
+    classDef userC fill:#f1f5f9,stroke:#475569,color:#0f172a,font-weight:bold
+    classDef shellC fill:#eef2ff,stroke:#6366f1,color:#312e81
+    classDef webC fill:#ecfeff,stroke:#0891b2,color:#0e4f5c
+    classDef runC fill:#fffbeb,stroke:#d97706,color:#7c2d12
+    classDef gateC fill:#fff7ed,stroke:#ea580c,color:#7c2d12,font-weight:bold
+    classDef taskC fill:#f0fdf4,stroke:#16a34a,color:#14532d
+    classDef storeC fill:#fdf4ff,stroke:#c026d3,color:#701a75
+    classDef llmC fill:#fef2f2,stroke:#dc2626,color:#7f1d1d
+
+    class user userC
+    class win,uvi shellC
+    class static,rest,sse webC
+    class mode,start,loop,tool,emit,done runC
+    class gate gateC
+    class tc,tv,tm taskC
+    class ev,mem,art storeC
+    class llm llmC
 ```
 
-上图只画运行机制本身，不把所有基础设施依赖都塞进图里。图里的重点是：
+这张图按四层从上到下展开：**桌面外壳 → FastAPI 单端口服务 → 双运行时（前台 `RunEngine` + 后台 `TaskEngine`）→ `SessionStore` 本地持久化**；`LLM Client` 被两个运行时共享。要点：
 
-- 中间这条链路就是主 agent loop，真正的循环发生在 `模型决定下一步 -> 调工具 -> 回到决定`，以及 `准备输出 -> 是否满足结束条件 -> 回到决定`
-- 右侧后台任务只分成两类：运行中任务与 run 收尾任务，避免把四个 task 全部拉成长线
-- `verification` 属于运行中任务，所以它的结果会回流到“是否满足结束条件”
-
-实际支撑关系是：
-
-- `RunEngine` 和 `TaskEngine` 都会使用 `LLM Client / CLIProxy / Provider`
-- 两者都会把状态、事件、记忆和产物写入 `SessionStore`
-- `SessionStore` 再统一管理多层记忆与 session 文件
+- 中间的环路才是真正的 agent loop：`模型决定下一步 → 调工具 → 回到决定`，一直循环到模型选择 `finish` 才进入放行判定；它不是写死的“解析 → 检索 → 回答”流水线。
+- `answer` 模式下，高风险问题会派生 `verification` 任务，其核验结果回流到“是否放行”；同时 `compact` 任务在后台压缩，结果先作为候选、到安全边界才合并，绝不热替换流式中的状态。
+- `analyze` 完成后派生 `session_memory_update` / `memory_extraction` 收尾任务，把工作记忆与长期记忆沉淀下来。
+- 所有 run / task 的状态、事件、记忆与产物都写入 `SessionStore`；SSE 先**重放**已存事件再**续传**新事件，因此关闭窗口或刷新后仍能恢复与回放。
 
 ### 0.(补充) 论文解析与本地证据
 
@@ -477,7 +528,7 @@ cd frontend && npm run dev              # 前端，浏览器访问 http://127.0.
 
 ```bash
 conda activate research_tools
-C:\Users\kevin\anaconda3\envs\research_tools\python.exe -m pytest tests -q
+python -m pytest tests -q
 ```
 
 或直接：
@@ -504,4 +555,4 @@ npm run test
 
 ## 十一、License
 
-本仓库使用 `MIT License`，完整文本见根目录 [LICENSE](/D:/Kevin/PhD/Project/ResearchTools/PaperReader/LICENSE)。
+本仓库使用 `MIT License`，完整文本见根目录 [LICENSE](LICENSE)。
