@@ -1,6 +1,6 @@
 ﻿# PaperReader
 
-> 面向论文精读场景的本地优先阅读工作台。它不是一次性摘要器，而是一个围绕 `session` 持久化状态构建的论文阅读运行时。
+> 面向论文精读场景的本地优先阅读工作台。它不是一次性摘要器，而是一个围绕 `session` 持久化状态构建的论文阅读运行时。默认以轻量级桌面应用形式运行（原生窗口 + 进程内 FastAPI），也保留浏览器开发模式。
 
 PaperReader 的目标不是“给论文生成一段看起来不错的总结”，而是帮助研究者在同一个会话里持续完成：上传论文、解析原文、生成分析、追问细节、补充相关文献、维护记忆、做高风险核验，并最终沉淀成结构化归档。
 
@@ -29,6 +29,7 @@ PaperReader 针对的是这些问题。它把“读论文”建模为一个持�
 - 文献补充：支持发现相关文献并本地化到当前 session
 - 归档质量提升：`archive` 会直接保留分析结果，同时把问答整理为综合总结，并输出轻量 Markdown 校验警告
 - 持久化任务系统：后台任务有状态、有日志、有进度、可停止、刷新后可恢复
+- 桌面应用形态：通过 `pywebview` 在系统原生 WebView（Windows 上为 Edge WebView2）中加载前端，进程内启动 FastAPI，单端口、单进程、单窗口，工作流与 `data/` 持久化完全不变
 - 前后端测试：覆盖流式事件、任务面板、记忆存储、运行时 API 与测试数据隔离
 
 推荐使用流程:
@@ -214,7 +215,7 @@ PaperReader 当前维护五层记忆：
 
 ## 四、前端界面结构
 
-前端目前采用三栏工作台：
+前端构建产物由 FastAPI 一并托管（`frontend/dist` 挂载在根路径），日常使用时通过桌面入口 `desktop_app.py` 在原生窗口中加载 `http://127.0.0.1:8000`；前端开发调试时仍可单独运行 Vite dev server。无论哪种形态，界面都采用同一套三栏工作台：
 
 ### 左侧：当前 Session 文件管理
 
@@ -310,7 +311,8 @@ PaperReader/
 ├─ product_spec.md             # 产品规格
 ├─ system_architecture.md      # 系统架构说明
 ├─ pyproject.toml              # Python 项目配置
-├─ start.bat                   # 一键启动前后端
+├─ desktop_app.py              # 桌面应用入口（pywebview + 进程内 uvicorn）
+├─ start.bat                   # 一键启动桌面应用
 └─ run_tests.bat               # 测试入口
 ```
 
@@ -431,30 +433,38 @@ copy .env.example .env
 
 ## 九、快速开始
 
-### 方式一：直接启动
+### 方式一：一键启动桌面应用（推荐）
 
 ```bat
 start.bat
 ```
 
-默认地址：
+`start.bat` 会激活 conda 环境、按需启动 CLIProxyAPI、在 `frontend/dist` 缺失时自动构建前端，最后运行 `desktop_app.py`：进程内拉起 FastAPI（`http://127.0.0.1:8000`），并在原生窗口中加载工作台。关闭窗口即退出整个应用。
 
-- Backend: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5173`
-
-### 方式二：手动启动
-
-后端：
+也可以在已激活环境后直接运行：
 
 ```bash
-uvicorn backend.app.main:app --reload
+python desktop_app.py
 ```
 
-前端：
+### 方式二：浏览器开发模式
+
+适合调试前端（热更新）。后端仍由桌面入口在同一端口内拉起，前端单独跑 Vite dev server：
 
 ```bash
+# 终端 1：启动后端 + 一个指向 5173 的窗口
+python desktop_app.py --dev
+
+# 终端 2：启动前端热更新（http://127.0.0.1:5173）
 cd frontend
 npm run dev
+```
+
+若只想要纯浏览器调试而不开窗口，也可手动分别启动：
+
+```bash
+uvicorn backend.app.main:app --reload   # 后端
+cd frontend && npm run dev              # 前端，浏览器访问 http://127.0.0.1:5173
 ```
 
 ## 十、测试

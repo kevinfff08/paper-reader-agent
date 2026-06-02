@@ -75,10 +75,24 @@ if /I "%LLM_MODE%"=="setup-token" (
     echo.
 )
 
-REM --- Start backend and frontend ---
-start "PaperReader Backend" cmd /k "cd /d %ROOT% && call conda activate research_tools && uvicorn backend.app.main:app --reload"
-start "PaperReader Frontend" cmd /k "cd /d %ROOT%frontend && npm run dev"
+REM --- Ensure frontend build exists (desktop app serves frontend/dist) ---
+if not exist "%ROOT%frontend\dist\index.html" (
+    echo [BUILD] frontend\dist not found. Building frontend ...
+    pushd "%ROOT%frontend"
+    call npm install
+    call npm run build
+    popd
+    if not exist "%ROOT%frontend\dist\index.html" (
+        echo [ERROR] Frontend build failed. Please check npm output above.
+        pause
+        exit /b 1
+    )
+    echo [OK] Frontend built.
+    echo.
+)
 
-echo PaperReader is starting...
-echo Backend:  http://127.0.0.1:8000
-echo Frontend: http://127.0.0.1:5173
+REM --- Launch the desktop app (in-process FastAPI + native WebView window) ---
+echo PaperReader is starting as a desktop app ...
+echo Backend (in-process): http://127.0.0.1:8000
+echo.
+python "%ROOT%desktop_app.py"

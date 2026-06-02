@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes.sessions import router as session_router
 from backend.app.core.config import get_settings
@@ -78,7 +81,22 @@ def create_app() -> FastAPI:
     def healthcheck() -> dict[str, str]:
         return {"status": "ok"}
 
+    _mount_frontend(app)
+
     return app
+
+
+def _mount_frontend(app: FastAPI, dist_dir: Path | None = None) -> None:
+    """Serve the built React frontend so the desktop app runs on a single port.
+
+    The static mount is registered last and only when ``frontend/dist`` exists,
+    so API and SSE routes always take precedence and pure-backend or dev runs
+    (where no build output is present) are unaffected.
+    """
+    if dist_dir is None:
+        dist_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    if dist_dir.is_dir():
+        app.mount("/", StaticFiles(directory=dist_dir, html=True), name="frontend")
 
 
 _app: FastAPI | None = None
