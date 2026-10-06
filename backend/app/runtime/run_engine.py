@@ -769,7 +769,7 @@ class RunEngine:
             instructions = "\n".join(f"字段 {key}：{instruction}" for key, title, instruction in GUIDE_SECTIONS)
             schema = json.dumps({key: "Markdown 字符串" for key, _, _ in GUIDE_SECTIONS}, ensure_ascii=False)
             prompt = (
-                f"为这篇论文写一份连贯、不重复的阅读导引，中文正文总计约1200—1800字。核心想法只解释一次；方法最重要。\n"
+                f"为这篇论文写一份连贯、不重复的研究导读，中文正文总计约1200—1800字；必要推导可以适当展开。围绕研究问题和关键论证组织，按实际贡献类型分配篇幅，核心思想只解释一次。\n"
                 f"读者背景：{session.background or '未指定，解释必要前置知识'}\n"
                 f"阅读目标：{session.user_goal or '快速理解核心思想'}\n关注问题：{focus or '无'}\n"
                 f"只返回如下键名的 JSON 对象，不要在键名中添加中文标题，不要外层代码围栏：\n{schema}\n{instructions}\n\n"

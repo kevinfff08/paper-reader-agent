@@ -244,7 +244,9 @@ describe("WorkspaceScreen", () => {
     await screen.findAllByText("Test Session");
     fireEvent.click(screen.getByRole("button", { name: "举个例子" }));
     const input = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
-    expect((input as HTMLTextAreaElement).value).toContain("具体的小例子");
+    expect((input as HTMLTextAreaElement).value).toContain("论文中的一个例子");
+    fireEvent.click(screen.getByRole("button", { name: "理清论证" }));
+    expect((input as HTMLTextAreaElement).value).toContain("前提如何通向结论");
     expect(input).toHaveFocus();
     expect(mockedApi.createRun).not.toHaveBeenCalled();
   });
