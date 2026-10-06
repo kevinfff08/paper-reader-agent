@@ -39,7 +39,7 @@ from backend.app.services.reporting.archive_report import ArchiveReportBuilder
 from backend.app.services.retrieval.local_evidence import LocalEvidenceRetriever
 from backend.app.services.verification.verifier import AnswerVerifier
 from backend.app.storage.session_store import SessionStore
-from backend.app.services.reading import GUIDE_SECTIONS, TUTOR_SYSTEM, paper_context
+from backend.app.services.reading import GUIDE_SECTIONS, TUTOR_SYSTEM, paper_context, synthesis_context
 
 
 logger = get_app_logger("run_engine")
@@ -826,48 +826,34 @@ class RunEngine:
         analyses: list[AnalysisArtifact],
         focus_question: str | None,
     ) -> AnalysisArtifact:
-        titles = [doc.title for doc in parsed_docs]
-        base_content = [
-            f"The session contains {len(parsed_docs)} paper(s): {', '.join(titles)}.",
-            "The synthesis first compares the stated problem definitions, then aligns methods, evidence quality, and open questions.",
-        ]
-        if focus_question:
-            base_content.append(f"Current focus question: {focus_question}")
         synthesis_sections = [
-            AnalysisSection(key="overview", title="Cross-Paper Overview", content="\n".join(base_content)),
-            AnalysisSection(
-                key="comparative_insights",
-                title="Comparative Insights",
-                content="\n\n".join(
-                    f"- {analysis.title}: {analysis.sections[0].content[:250]}"
-                    for analysis in analyses
-                ),
-            ),
-            AnalysisSection(
-                key="study_plan",
-                title="Suggested Study Order",
-                content="Start with the paper that defines the clearest problem framing, then compare method sections, and finally inspect experiments and limitations side by side.",
-            ),
+            AnalysisSection(key="synthesis_unavailable", title="跨论文比较尚未生成",
+                content="当前未生成跨论文讲解。下面保留逐篇导读，可在模型服务可用后重新分析。"),
         ]
         if self.llm_client.is_configured:
             try:
-                guides = "\n\n".join(
-                    f"论文：{analysis.title}\n" + "\n".join(f"{section.title}: {section.content[:2200]}" for section in analysis.sections[:4])
-                    for analysis in analyses
-                )[:24000]
                 comparison = self.llm_client.generate(
-                    f"根据各篇导读，帮助读者建立论文之间的联系。解释共同问题、方法的关键区别、适用场景，最后给出具体阅读顺序及理由。不要只拼接摘要。\n"
-                    f"读者背景：{session.background or '未指定'}\n目标：{focus_question or session.user_goal or '理解论文'}\n{guides}",
-                    system=TUTOR_SYSTEM, max_tokens=2600,
+                    "像研究导师一样比较这些论文，约1000—1600字，围绕最值得理解的联系展开，不重复逐篇摘要。\n"
+                    "先判断关系：同一问题上的承接或分歧、互补视角，还是不同问题。只对可比论文建立紧凑对照；不同主题可以分组，不硬造共同研究主张。\n"
+                    "沿问题表述→关键假设→思想/论证→结论范围比较，精讲一个关键思想分歧。若有表面冲突，核对命题、条件和实验设置是否相同；"
+                    "区分理想总体结论、有限样本与经验结果，不用不同任务或评估协议的数字排优劣，不把形式记号解读为原文未声称的机制假设。\n"
+                    "以原文为准，已有导读只作线索，必要时纠正其中的过强说法。关键关系用论文简称及实际章节标明出处；原文截取不足时说明具体缺口。\n"
+                    "最后给一个来自具体分歧/未决点的研究问题及能区分两种解释的最小比较，并给相应阅读顺序。跨主题联系明确标为待验证设想，不把新联系说成原文结论或已确认新颖性。\n"
+                    f"读者背景：{session.background or '未指定'}\n目标：{focus_question or session.user_goal or '理解论文'}\n"
+                    f"{synthesis_context(parsed_docs, analyses)}",
+                    system=TUTOR_SYSTEM, max_tokens=3500,
                 )
+                if not comparison.strip():
+                    raise ValueError("Empty synthesis")
                 synthesis_sections = [AnalysisSection(key="overview", title="把几篇论文串起来理解", content=comparison)]
             except Exception:
                 logger.warning("Cross-paper explanation unavailable; preserving individual guides", exc_info=True)
         # Keep each guide accessible in the same reading view, including offline mode.
-        synthesis_sections.extend(
-            AnalysisSection(key=f"{analysis.analysis_id}_{section.key}", title=f"{titles[index]} · {section.title}", content=section.content)
-            for index, analysis in enumerate(analyses) for section in analysis.sections
-        )
+        doc_titles = {doc.paper_id: doc.title for doc in parsed_docs}
+        for analysis in analyses:
+            title = " / ".join(doc_titles[paper_id] for paper_id in analysis.paper_ids if paper_id in doc_titles) or analysis.title
+            synthesis_sections.extend(AnalysisSection(key=f"{analysis.analysis_id}_{section.key}",
+                title=f"{title} · {section.title}", content=section.content) for section in analysis.sections)
         analysis_id = uuid4().hex[:12]
         session_dir = self.store.session_dir(session.session_id)
         markdown_path = session_dir / "analysis" / f"{analysis_id}.md"

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 
-from backend.app.core.models.domain import ParsedDocument, ParsedSection, QARecord
+from backend.app.core.models.domain import AnalysisArtifact, AnalysisSection, ParsedDocument, ParsedSection, QARecord
 from backend.app.runtime.run_engine import RunEngine
-from backend.app.services.reading import GUIDE_SECTIONS, paper_context
+from backend.app.services.reading import GUIDE_SECTIONS, paper_context, synthesis_context
 from backend.app.services.retrieval.local_evidence import LocalEvidenceRetriever
 
 
@@ -132,3 +132,38 @@ def test_chinese_method_question_retrieves_english_method():
     results = LocalEvidenceRetriever().retrieve("这个方法的步骤是什么？", parsed_docs=[document()], analyses=[], qa_records=[], references=[])
     assert results
     assert "retrieves neighbors" in results[0].excerpt
+
+
+def analysis(paper_id):
+    return AnalysisArtifact(analysis_id=paper_id, session_id="s", paper_ids=[paper_id], title="Guide",
+        sections=[AnalysisSection(key=key, title=title, content=f"{paper_id}-{key}-marker " + "detail " * 1000)
+            for key, title, _ in GUIDE_SECTIONS], markdown_path="", created_at=datetime.now(UTC))
+
+
+def test_synthesis_keeps_primary_source_and_late_guide_sections_for_each_paper():
+    docs = [document(), document()]
+    docs[1].paper_id, docs[1].title = "q", "Later paper"
+    docs[1].sections = [ParsedSection(heading="Discussion", content="Later primary source marker")]
+    context = synthesis_context(docs, [analysis("q"), analysis("p")], budget=6000)
+    assert len(context) <= 6000
+    first, second = context.split("原文选段（截取，优先于导读）：\n")[1:]
+    assert "p-limitations-marker" in first and "q-limitations-marker" not in first
+    assert "q-follow_up-marker" in second and "Later primary source marker" in second
+
+
+@pytest.mark.parametrize("response", ["", RuntimeError("unavailable")])
+def test_synthesis_failure_is_visible_and_retains_correctly_named_guides(tmp_path, response):
+    runtime = engine(response)
+    if isinstance(response, Exception):
+        runtime.llm_client.generate.side_effect = response
+    (tmp_path / "analysis").mkdir()
+    runtime.store = SimpleNamespace(session_dir=lambda _: tmp_path)
+    doc = document()
+    other = document().model_copy(update={"paper_id": "q", "title": "Second"})
+    result = runtime._build_cross_paper_synthesis(SimpleNamespace(session_id="s", background=None, user_goal=None),
+        [doc, other], [analysis("q"), analysis("p")], None)
+    assert result.sections[0].key == "synthesis_unavailable"
+    assert len(result.sections) == 15
+    assert result.sections[1].title.startswith("Second ·")
+    assert result.sections[8].title.startswith("Example ·")
+    assert "Final result marker" in runtime.llm_client.generate.call_args.args[0]

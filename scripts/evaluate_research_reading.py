@@ -92,7 +92,7 @@ def main() -> None:
     class RecordedLLM(LLMClient):
         def generate(self, prompt: str, **kwargs) -> str:
             started = time.perf_counter()
-            record = {"prompt": prompt, "system": kwargs.get("system", "")}
+            record = {"prompt": prompt, "system": kwargs.get("system", ""), "max_tokens": kwargs.get("max_tokens")}
             try:
                 result = super().generate(prompt, **kwargs)
                 record["response"] = result
@@ -111,17 +111,28 @@ def main() -> None:
         model=settings.llm_model, base_url=settings.llm_proxy_url)
     if not client.is_configured:
         raise RuntimeError("A real model must be configured")
+    reused = None
+    if args.reuse_guides:
+        reused = json.loads((args.reuse_guides / "trial.json").read_text(encoding="utf-8"))
+        if reused["model"] != client.resolved_model:
+            raise ValueError("Reused guides must use the same model for a controlled comparison")
     engine.llm_client = client
     session = store.create_session(session_name=args.label, categories=[], external_links=[],
         background="机器学习方向博士生，熟悉概率、优化和深度学习，但尚未读过这些论文",
         user_goal="理解研究问题、核心思想和论证，判断相对已有工作的贡献，并形成值得进一步研究的问题")
     docs, analyses, runs = [], [], []
     metadata = {"model": client.resolved_model, "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "tracked_diff_sha256": hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD"])).hexdigest(),
+        "reused_guides": str(args.reuse_guides) if args.reuse_guides else None,
         "scope": "production reading/synthesis functions; official HTML import; no PDF parsing or UI test",
         "papers": [], "runs": runs}
     print(f"Output: {output}", flush=True)
     for key in args.papers:
         doc = import_html(key, *PAPERS[key], cache)
+        if reused:
+            original = next((item for item in reused["papers"] if item["key"] == key), None)
+            if not original or original["source_sha256"] != doc.metadata["source_sha256"]:
+                raise ValueError(f"Reused guide source does not match: {key}")
         docs.append(doc)
         metadata["papers"].append({"key": key, **doc.metadata})
         (output / f"{key}-context.txt").write_text(paper_context([doc]), encoding="utf-8")
@@ -142,9 +153,13 @@ def main() -> None:
             runs.append({"paper": key, "status": "failed", "error_type": type(exc).__name__})
         (output / "trial.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.compare and len(analyses) == len(docs):
+        started = time.perf_counter()
         synthesis = engine._build_cross_paper_synthesis(session, docs, analyses,
             "这些论文在研究问题、核心假设和论证上是什么关系？哪些结论可以直接比较？给出一个有根据的后续研究问题。")
         (output / "comparison.md").write_text(engine._analysis_markdown("Comparison", synthesis.sections), encoding="utf-8")
+        runs.append({"stage": "comparison", "status": "failed" if synthesis.sections[0].key == "synthesis_unavailable" else "completed",
+            "seconds": round(time.perf_counter() - started, 2)})
+        (output / "trial.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     if any(run["status"] == "failed" for run in runs):
         raise SystemExit(1)
 

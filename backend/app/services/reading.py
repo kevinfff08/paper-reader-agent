@@ -2,7 +2,7 @@
 
 import re
 
-from backend.app.core.models.domain import ParsedDocument
+from backend.app.core.models.domain import AnalysisArtifact, ParsedDocument
 from backend.app.services.retrieval.local_evidence import _tokenize
 
 
@@ -114,3 +114,25 @@ def paper_context(docs: list[ParsedDocument], budget: int = 24000, query: str = 
             parts.append(doc.plain_text[:per_doc])
         result.append("\n".join(parts)[:per_doc])
     return "\n\n".join(result)[:budget]
+
+
+def synthesis_context(docs: list[ParsedDocument], analyses: list[AnalysisArtifact], budget: int = 36000) -> str:
+    """Give each paper source passages and all guide sections, matched by paper ID."""
+    if not docs or budget <= 0:
+        return ""
+    per_doc = max(0, (budget - 2 * (len(docs) - 1)) // len(docs))
+    blocks = []
+    for doc in docs:
+        guide = next((item for item in reversed(analyses) if item.paper_ids == [doc.paper_id]), None)
+        source_limit = per_doc * 2 // 3 if guide and guide.sections else per_doc
+        source = "原文选段（截取，优先于导读）：\n" + paper_context([doc], budget=max(0, source_limit - 30))
+        remaining = per_doc - len(source) - 1
+        guide_parts = []
+        if guide and guide.sections and remaining > 80:
+            header = "已有导读（二手解释，可能有误；不能替代原文）：\n"
+            section_budget = max(0, (remaining - len(header)) // len(guide.sections) - 1)
+            for section in guide.sections:
+                guide_parts.append(f"[{section.title}] {section.content}"[:section_budget])
+            source += "\n" + header + "\n".join(guide_parts)
+        blocks.append(source[:per_doc])
+    return "\n\n".join(blocks)[:budget]
