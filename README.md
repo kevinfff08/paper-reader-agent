@@ -578,3 +578,9 @@ npm run test
 导读要求约 1200—1800 字，普通追问约 400—800 字；这是生成指导而非强行截断。关注当前困惑，不默认展开未请求的复现流程或重复总结。真实输出仍需人工阅读评估，单篇试跑不能证明跨论文的普遍理解效果。
 
 试跑支持 `--resume <trial-directory>`，保留失败尝试并继续未完成问题。复现、生成和参数类追问优先读取匹配的附录；兼容 PDF 把 `MSMData` 等标题词粘连的情况。代理返回 HTTP 408 时纳入原有有限重试；最终失败仍明确报告，不伪造讲解。
+
+### 多类型论文试读
+
+`python scripts/evaluate_research_reading.py --label trial` 使用 DPO、IPO 和 Lost in the Middle 的官方 HTML 调用实际导读函数；`--papers lora` 可单独跑留出论文，`--compare` 增加跨篇比较。来源哈希、模型输入、真实输出和失败记录保存在 `.tmp-tests/research-reading/`；不覆盖 PDF 解析或 UI。评价维度与运行方式见 [跨论文试读](evaluations/research-reading.md)。
+
+无特定追问时，上下文先覆盖正文各节的开头与结尾，再扩展关键段落，按原文顺序呈现；省略处有标记，正文后的推导、反例、实验和讨论不会仅因位置靠后而被长篇引言挤掉。附录识别不再依赖解析器一定输出 References 标题；具体追问仍按相关性读取正文和附录。

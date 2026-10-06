@@ -107,6 +107,27 @@ def test_context_budget_preserves_later_sections():
     assert "Final result marker" in context
 
 
+def test_overview_covers_late_argument_and_detects_appendix_without_references():
+    doc = document()
+    doc.sections = [ParsedSection(heading="1 Introduction", content="motivation " * 1500),
+        ParsedSection(heading="2 Method", content="procedure " * 1500),
+        ParsedSection(heading="3 Derivation", content="proof " * 1000 + "Final objective marker"),
+        ParsedSection(heading="4 Counterexample", content="Counterexample marker"),
+        ParsedSection(heading="5 Discussion", content="Open question marker"),
+        ParsedSection(heading="A.1 Additional Experiments", content="Appendix distractor " * 1000)]
+    context = paper_context([doc], budget=4000)
+    assert len(context) <= 4000
+    assert all(marker in context for marker in ["Final objective marker", "Counterexample marker", "Open question marker"])
+    assert "Appendix distractor" not in context
+    assert context.index("[1 Introduction]") < context.index("[5 Discussion]")
+
+
+def test_multi_document_context_does_not_starve_later_papers():
+    first, second = document(), document()
+    second.title = "Second paper marker"
+    assert "Second paper marker" in paper_context([first, second], budget=4000)
+
+
 def test_chinese_method_question_retrieves_english_method():
     results = LocalEvidenceRetriever().retrieve("这个方法的步骤是什么？", parsed_docs=[document()], analyses=[], qa_records=[], references=[])
     assert results

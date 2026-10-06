@@ -27,11 +27,7 @@ TUTOR_SYSTEM = (
 
 
 def paper_context(docs: list[ParsedDocument], budget: int = 24000, query: str = "") -> str:
-    """Keep coherent method passages; retrieve relevant appendices for follow-ups.
-
-    Equal slices across dozens of appendix headings removed the training objective
-    in the real MSM trial. Prefer complete relevant sections within a hard budget.
-    """
+    """Cover the main argument before expanding sections; target queries separately."""
     if not docs:
         return ""
     per_doc = max(1, budget // len(docs))
@@ -44,10 +40,13 @@ def paper_context(docs: list[ParsedDocument], budget: int = 24000, query: str = 
         for index, section in enumerate(doc.sections):
             heading = section.heading.strip()
             lowered = heading.lower()
+            # Parsers need not emit a References heading before appendix sections.
+            if re.match(r"^(appendix\b|[A-Z](?:\.\d+|[. ]\s*[A-Z]))", heading):
+                appendix = True
             if re.match(r"^(references|bibliography|appendix contents)\b", lowered):
                 appendix = True
                 continue
-            if lowered == "abstract" or "acknowledgment" in lowered or "author contribution" in lowered:
+            if lowered == "abstract" or re.search(r"acknowledg|author contribution", lowered):
                 continue
             # Some PDF prompt boxes are mistakenly emitted as enormous headings.
             if len(heading) > 200 or not section.content.strip():
@@ -69,6 +68,32 @@ def paper_context(docs: list[ParsedDocument], budget: int = 24000, query: str = 
                 continue
             candidates.append((score, index, section))
         remaining = per_doc - len(parts[0]) - 1
+        if not query and candidates and remaining > 0:
+            # A short head AND tail of every main-body section keeps later claims,
+            # sampled objectives, counterexamples and conclusions in view. Spend
+            # remaining space on coherent passages, not dozens of appendices.
+            headers = {index: f"\n[{section.heading}]\n" for _, index, section in candidates}
+            allowance = max(0, remaining - sum(len(h) + 1 for h in headers.values()))
+            base = min(1100, allowance // len(candidates))
+            sizes = {index: min(len(section.content), base) for _, index, section in candidates}
+            spare = allowance - sum(sizes.values())
+            for _, index, section in sorted(candidates, key=lambda item: (-item[0], item[1])):
+                extra = min(spare, max(0, min(6500, len(section.content)) - sizes[index]))
+                sizes[index] += extra
+                spare -= extra
+            for _, index, section in candidates:
+                size = sizes[index]
+                if size <= 0 or (size < 80 and size < len(section.content)):
+                    continue
+                content = section.content
+                if len(content) > size:
+                    marker = "\n[... section excerpt omitted ...]\n"
+                    head = (size - len(marker)) * 2 // 3
+                    tail = size - len(marker) - head
+                    content = content[:head] + marker + content[-tail:]
+                parts.append(headers[index] + content)
+            result.append("\n".join(parts)[:per_doc])
+            continue
         for _, _, section in sorted(candidates, key=lambda item: (-item[0], item[1])):
             heading = f"\n[{section.heading}]\n"
             available = min(6500, remaining - len(heading) - 1)
