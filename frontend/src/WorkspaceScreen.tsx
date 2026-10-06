@@ -42,43 +42,43 @@ type RunEventMeta = {
 function describeRunEvent(event: RunEvent): RunEventMeta {
   switch (event.event_type) {
     case "run_started":
-      return { icon: "▶", title: "Run started", detail: `${String(event.payload.mode ?? "run")} mode`, tone: "active" };
+      return { icon: "▶", title: "开始处理", detail: `${String(event.payload.mode ?? "run")} mode`, tone: "active" };
     case "tool_call_started":
-      return { icon: "⚙", title: "Tool started", detail: String(event.payload.tool ?? "tool"), tone: "active" };
+      return { icon: "⚙", title: "开始读取", detail: String(event.payload.tool ?? "tool"), tone: "active" };
     case "tool_call_finished":
-      return { icon: "✓", title: "Tool finished", detail: String(event.payload.tool ?? "tool"), tone: "neutral" };
+      return { icon: "✓", title: "读取完成", detail: String(event.payload.tool ?? "tool"), tone: "neutral" };
     case "evidence_added":
-      return { icon: "❝", title: "Evidence added", detail: String(event.payload.label ?? "evidence"), tone: "neutral" };
+      return { icon: "❝", title: "找到相关原文", detail: String(event.payload.label ?? "evidence"), tone: "neutral" };
     case "verification_required":
-      return { icon: "⚠", title: "Verification requested", detail: String(event.payload.question ?? "review needed"), tone: "active" };
+      return { icon: "⚠", title: "正在检查原文", detail: String(event.payload.question ?? "review needed"), tone: "active" };
     case "memory_updated":
-      return { icon: "✎", title: "Memory updated", detail: null, tone: "neutral" };
+      return { icon: "✎", title: "会话记忆已更新", detail: null, tone: "neutral" };
     case "run_completed":
-      return { icon: "✔", title: "Run completed", detail: null, tone: "success" };
+      return { icon: "✔", title: "处理完成", detail: null, tone: "success" };
     case "run_failed":
-      return { icon: "✕", title: "Run failed", detail: String(event.payload.error ?? "unknown error"), tone: "danger" };
+      return { icon: "✕", title: "处理失败", detail: String(event.payload.error ?? "unknown error"), tone: "danger" };
     default:
       return { icon: "•", title: event.event_type.replace(/_/g, " "), detail: null, tone: "neutral" };
   }
 }
 
 const CATEGORY_META: Record<string, { label: string; icon: string; hint: string }> = {
-  paper: { label: "Papers", icon: "📄", hint: "Uploaded source documents" },
-  parsed: { label: "Parsed Text", icon: "🧩", hint: "Structured text extracted from papers" },
-  analysis: { label: "Analyses", icon: "🧠", hint: "Generated reading analyses" },
-  reference: { label: "References", icon: "🔗", hint: "Localized external references" },
-  memory: { label: "Memory", icon: "💾", hint: "Session memory, notes & summaries" },
-  task: { label: "Tasks", icon: "⚙️", hint: "Background task records" },
-  archive: { label: "Archive", icon: "📦", hint: "Exported session archive" },
+  paper: { label: "论文原文", icon: "📄", hint: "上传的原始文档" },
+  parsed: { label: "解析文本", icon: "🧩", hint: "论文的结构化解析内容" },
+  analysis: { label: "阅读导引", icon: "🧠", hint: "生成的研究导读" },
+  reference: { label: "参考文献", icon: "🔗", hint: "已保存的外部参考资料" },
+  memory: { label: "会话记忆", icon: "💾", hint: "会话记忆、笔记与摘要" },
+  task: { label: "任务记录", icon: "⚙️", hint: "后台任务记录" },
+  archive: { label: "归档文件", icon: "📦", hint: "导出的阅读成果" },
 };
 
 const CATEGORY_ORDER = ["paper", "parsed", "analysis", "reference", "memory", "task", "archive"];
 
 const MEMORY_FILE_NAMES: Record<string, string> = {
-  "memory.md": "Session memory",
-  "notes.json": "Verification notes",
-  "summaries.json": "Compaction summaries",
-  "working_state.json": "Working state",
+  "memory.md": "会话记忆",
+  "notes.json": "原文检查记录",
+  "summaries.json": "压缩摘要",
+  "working_state.json": "工作状态",
 };
 
 // Stored paper names embed the internal id ("206274018c4d_2605.02087v1"); drop
@@ -117,7 +117,7 @@ function resolveFileTitle(file: SessionFileEntry, maps: ResolverMaps): string {
     }
     case "parsed": {
       const paper = maps.papers.get(leadingId) ?? maps.papers.get(stem);
-      return paper ? `Parsed · ${cleanPaperName(paper)}` : "Parsed document";
+      return paper ? `Parsed · ${cleanPaperName(paper)}` : "解析文档";
     }
     case "analysis": {
       const analysis = maps.analyses.get(leadingId) ?? maps.analyses.get(stem);
@@ -130,10 +130,10 @@ function resolveFileTitle(file: SessionFileEntry, maps: ResolverMaps): string {
       return MEMORY_FILE_NAMES[file.label] ?? stem;
     case "task": {
       const kind = maps.tasks.get(leadingId) ?? maps.tasks.get(stem);
-      return kind ? `${kind.replace(/_/g, " ")} task` : "Background task";
+      return kind ? `${kind.replace(/_/g, " ")} task` : "后台任务";
     }
     case "archive":
-      return "Session archive";
+      return "会话归档";
     default:
       return file.label;
   }
@@ -217,6 +217,7 @@ export default function WorkspaceScreen() {
   const [localizingResultId, setLocalizingResultId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<"discussion" | "discovery" | "files" | "tasks" | null>(null);
   const [panelPinned, setPanelPinned] = useState(true);
+  const [navigationOpen, setNavigationOpen] = useState(false);
   const [taskEvents, setTaskEvents] = useState<Record<string, TaskEvent[]>>({});
   const questionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const runSourceRef = useRef<EventSource | null>(null);
@@ -330,6 +331,7 @@ export default function WorkspaceScreen() {
     if (!sessionName.trim()) {
       return;
     }
+    setUiError(null);
     setLoading(true);
     try {
       const detail = await createSession({
@@ -345,6 +347,8 @@ export default function WorkspaceScreen() {
       setCurrentSearch(null);
       setView("workspace");
       await refreshSessions(detail.session.session_id);
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "操作未完成，请稍后重试。");
     } finally {
       setLoading(false);
     }
@@ -354,11 +358,14 @@ export default function WorkspaceScreen() {
     if (!selectedSession || uploadFiles.length === 0) {
       return;
     }
+    setUiError(null);
     setLoading(true);
     try {
       await uploadPapers(selectedSession.session.session_id, uploadFiles);
       setUploadFiles([]);
       await refreshSessions(selectedSession.session.session_id);
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "操作未完成，请稍后重试。");
     } finally {
       setLoading(false);
     }
@@ -369,6 +376,7 @@ export default function WorkspaceScreen() {
       return;
     }
     runSourceRef.current?.close();
+    setUiError(null);
     setLoading(true);
     setStreamedText("");
     setRunEvents([]);
@@ -444,6 +452,7 @@ export default function WorkspaceScreen() {
     if (!selectedSession || !discoveryQuery.trim()) {
       return;
     }
+    setUiError(null);
     setDiscoveryLoading(true);
     try {
       const search = await discoverLiterature(selectedSession.session.session_id, {
@@ -455,6 +464,8 @@ export default function WorkspaceScreen() {
       });
       setCurrentSearch(search);
       await refreshSessions(selectedSession.session.session_id);
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "操作未完成，请稍后重试。");
     } finally {
       setDiscoveryLoading(false);
     }
@@ -464,10 +475,13 @@ export default function WorkspaceScreen() {
     if (!selectedSession || !currentSearch) {
       return;
     }
+    setUiError(null);
     setLocalizingResultId(resultId);
     try {
       await localizeDiscoveryReference(selectedSession.session.session_id, currentSearch.search_id, resultId);
       await refreshSessions(selectedSession.session.session_id);
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "操作未完成，请稍后重试。");
     } finally {
       setLocalizingResultId(null);
     }
@@ -477,8 +491,13 @@ export default function WorkspaceScreen() {
     if (!selectedSession) {
       return;
     }
-    const response = await stopTask(selectedSession.session.session_id, taskId);
-    setSelectedSession((current) => updateArtifactsTask(current, response.task));
+    setUiError(null);
+    try {
+      const response = await stopTask(selectedSession.session.session_id, taskId);
+      setSelectedSession((current) => updateArtifactsTask(current, response.task));
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "未能停止任务，请重试。");
+    }
   }
 
   const analyses = selectedSession?.artifacts.analyses ?? [];
@@ -543,20 +562,21 @@ export default function WorkspaceScreen() {
         <header className="session-manager-header">
           <div>
             <p className="eyebrow">PaperReader</p>
-            <h1>All Sessions</h1>
+            <h1>所有会话</h1>
           </div>
-          <button onClick={() => setView("workspace")} disabled={!selectedSession}>Open Workspace</button>
+          <button onClick={() => setView("workspace")} disabled={!selectedSession}>继续阅读</button>
         </header>
+        {uiError && <p className="error-notice" role="alert">{uiError}</p>}
         <div className="session-manager-grid">
           <form className="panel" onSubmit={onCreateSession}>
-            <h2>Create Session</h2>
+            <h2>新建阅读会话</h2>
             <input
-              placeholder="Session name"
+              aria-label="会话名称" placeholder="会话名称"
               value={sessionName}
               onChange={(event) => setSessionName(event.target.value)}
             />
             <input
-              placeholder="Categories (comma separated)"
+              aria-label="分类标签" placeholder="分类标签，用逗号分隔"
               value={categories}
               onChange={(event) => setCategories(event.target.value)}
             />
@@ -564,10 +584,10 @@ export default function WorkspaceScreen() {
               value={readerBackground} onChange={(event) => setReaderBackground(event.target.value)} />
             <input aria-label="阅读目标" placeholder="阅读目标（可选）：例如理解核心想法，或准备复现方法"
               value={readingGoal} onChange={(event) => setReadingGoal(event.target.value)} />
-            <button type="submit" disabled={loading}>Create</button>
+            <button type="submit" disabled={loading}>创建会话</button>
           </form>
           <section className="panel">
-            <h2>Session Manager</h2>
+            <h2>最近会话</h2>
             <div className="session-list">
               {sessions.map((session) => (
                 <button
@@ -579,7 +599,7 @@ export default function WorkspaceScreen() {
                   }}
                 >
                   <span>{session.session_name}</span>
-                  <small>{session.categories.join(", ") || "Uncategorized"}</small>
+                  <small>{session.categories.join(", ") || "未分类"}</small>
                 </button>
               ))}
             </div>
@@ -589,21 +609,26 @@ export default function WorkspaceScreen() {
     );
   }
 
+  function closePanel() {
+    const trigger = document.getElementById(`trigger-${activePanel}`);
+    setActivePanel(null);
+    trigger?.focus();
+  }
   const tools = [["discussion", "讨论"], ["discovery", "找论文"], ["files", "文件"], ["tasks", "任务"]] as const;
   return (
     <div className={`reader-shell ${activePanel ? "panel-open" : ""} ${panelPinned ? "panel-pinned" : ""}`}
-      onKeyDown={(event) => { if (event.key === "Escape") setActivePanel(null); }}>
+      onKeyDown={(event) => { if (event.key === "Escape") closePanel(); }}>
       <aside className="reader-nav" aria-label="会话导航">
-        <div className="reader-brand">PaperReader<span>研究，从读懂开始</span></div>
+        <div className="nav-heading"><div className="reader-brand">PaperReader<span>研究，从读懂开始</span></div><button className="mobile-nav-toggle secondary-button" aria-expanded={navigationOpen} aria-controls="nav-details" onClick={() => setNavigationOpen(!navigationOpen)}>论文列表</button></div>
         <button className="secondary-button" onClick={() => setView("sessions")}>所有会话</button>
-        {selectedSession ? <>
+        <div id="nav-details" className={`nav-details ${navigationOpen ? "expanded" : ""}`}>{selectedSession ? <>
           <div className="nav-section-label">当前会话</div>
           <strong className="nav-session-title">{selectedSession.session.session_name}</strong>
           <p className="subtle">{selectedSession.session.categories.join(" / ") || "未分类"}</p>
           <div className="nav-section-label">论文 · {selectedSession.artifacts.papers.length}</div>
           <ul className="paper-nav-list">{selectedSession.artifacts.papers.map((paper) =>
             <li key={paper.paper_id}><button className="paper-nav-button" aria-current={latestAnalysis?.paper_ids.length === 1 && latestAnalysis.paper_ids[0] === paper.paper_id ? "page" : undefined}
-              onClick={() => { setSelectedPaperId(paper.paper_id); setSelectedAnalysisId(null); }}>{cleanPaperName(paper.title || paper.filename)}</button></li>)}</ul>
+              onClick={() => { setSelectedPaperId(paper.paper_id); setSelectedAnalysisId(null); setNavigationOpen(false); }}>{cleanPaperName(paper.title || paper.filename)}</button></li>)}</ul>
           <details className="upload-control"><summary>添加论文</summary>
             <input aria-label="选择论文文件" type="file" multiple onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))} />
             <button onClick={() => void onUpload()} disabled={loading || uploadFiles.length === 0}>上传论文</button>
@@ -612,13 +637,13 @@ export default function WorkspaceScreen() {
             <p>{selectedSession.session.background || "尚未填写阅读背景"}</p>
             <p>{selectedSession.session.user_goal || "尚未填写阅读目标"}</p>
           </details>
-        </> : <p className="subtle">创建会话，开始阅读。</p>}
+        </> : <p className="subtle">创建会话，开始阅读。</p>}</div>
       </aside>
       <main className="reader-workspace" ref={workspaceRef} onScroll={(event) => { readingPositions.current[readingKey] = event.currentTarget.scrollTop; }}>
         <header className="reader-toolbar">
           <span className="reader-location">阅读工作台</span>
           <nav className="utility-tabs" aria-label="阅读工具">{tools.map(([key, label]) =>
-            <button key={key} className="secondary-button" aria-pressed={activePanel === key} aria-controls={`tool-${key}`}
+            <button id={`trigger-${key}`} key={key} className="secondary-button" aria-pressed={activePanel === key} aria-controls={`tool-${key}`}
               onClick={() => setActivePanel(activePanel === key ? null : key)}>{label}{key === "tasks" && visibleTasks.some((task) => !isTaskTerminal(task)) && <span className="activity-dot" aria-label="任务进行中" />}</button>)}</nav>
           <button className="secondary-button" onClick={() => void onArchive()} disabled={!selectedSession || loading}>归档</button>
         </header>
@@ -633,7 +658,7 @@ export default function WorkspaceScreen() {
               {analyses.length > 0 && <select aria-label="选择导读或历史版本" value={latestAnalysis?.analysis_id ?? ""}
                 onChange={(event) => { setSelectedPaperId(null); setSelectedAnalysisId(event.target.value); }}>
                 {!latestAnalysis && <option value="">选择已有导读</option>}
-                {[...analyses].reverse().map((item) => <option key={item.analysis_id} value={item.analysis_id}>{item.title.replace(/^Single-Paper Analysis: /, "")} · {new Date(item.created_at).toLocaleString()}</option>)}
+                {[...analyses].reverse().map((item) => <option key={item.analysis_id} value={item.analysis_id}>{item.title.replace(/^Single-Paper Analysis: /, "").replace(/^Cross-Paper Synthesis$/, "跨篇比较")} · {new Date(item.created_at).toLocaleString()}</option>)}
               </select>}
             </div>
                 <div className="analysis-actions">
@@ -648,18 +673,18 @@ export default function WorkspaceScreen() {
                 </div>
                 <header className="document-heading"><p className="eyebrow">{latestAnalysis?.paper_ids.length && latestAnalysis.paper_ids.length > 1 ? "跨篇比较" : "研究导读"}</p>
                   <h1>{latestAnalysis?.title.replace(/^Single-Paper Analysis: /, "").replace(/^Cross-Paper Synthesis$/, "把几篇论文串起来理解") || "从一个好问题开始"}</h1></header>
-                {uiError && <p className="error-notice" role="alert">{uiError}</p>}
+                {uiError && !activePanel && <p className="error-notice" role="alert">{uiError}</p>}
                 {latestAnalysis && <details className="document-outline"><summary>章节目录 · {latestAnalysis.sections.length}</summary><nav aria-label="章节目录">
                   {latestAnalysis.sections.map((section, index) => <a key={section.key} href={`#section-${latestAnalysis.analysis_id}-${index}`}>{section.title}</a>)}
                 </nav></details>}
-                {activeRun?.status === "failed" && (
+                {activeRun?.status === "failed" && activePanel !== "discussion" && (
                   <p role="alert">{activeRun.error_message || "生成失败，请检查模型配置后重试。"}</p>
                 )}
                 {activeRun?.mode === "analyze" && streamedText && isRunStreaming ? (
                   <article className="analysis-section">
                     <div className="analysis-section-head">
-                      <h4>Streaming Analysis Draft</h4>
-                      {isRunStreaming && <span className="streaming-tag">Streaming…</span>}
+                      <h4>正在生成导读</h4>
+                      {isRunStreaming && <span className="streaming-tag">生成中…</span>}
                     </div>
                     <Markdown content={streamedText} />
                   </article>
@@ -686,8 +711,9 @@ export default function WorkspaceScreen() {
       <aside className="utility-panel" hidden={!activePanel} aria-label="辅助面板">
         <header className="utility-panel-header"><strong>{tools.find(([key]) => key === activePanel)?.[1]}</strong>
           <button className="secondary-button" aria-pressed={panelPinned} onClick={() => setPanelPinned(!panelPinned)}>{panelPinned ? "取消固定" : "固定面板"}</button>
-          <button className="secondary-button" onClick={() => setActivePanel(null)} aria-label="关闭辅助面板">关闭</button>
+          <button className="secondary-button" onClick={closePanel} aria-label="关闭辅助面板">关闭</button>
         </header>
+        {uiError && activePanel && activePanel !== "discussion" && <p className="error-notice" role="alert">{uiError}</p>}
         {selectedSession && <>
           <section id="tool-discussion" className="utility-content" hidden={activePanel !== "discussion"} aria-label="论文讨论">
             <div className="discussion-history">
@@ -698,9 +724,9 @@ export default function WorkspaceScreen() {
                       <h4>{record.question_text}</h4>
                       <Markdown content={record.answer_text} />
                       <div className="meta-block">
-                        <span>Verification: {record.verification_status}</span>
-                        <span>Evidence: {record.evidence_refs.length}</span>
-                        <span>New refs: {record.retrieval_refs.length}</span>
+                        <span>原文检查：{record.verification_status}</span>
+                        <span>原文片段：{record.evidence_refs.length}</span>
+                        <span>补充文献：{record.retrieval_refs.length}</span>
                       </div>
                     </article>
                   ))}
@@ -710,19 +736,21 @@ export default function WorkspaceScreen() {
                   <article className="qa-card streaming-card">
                     <div className="analysis-section-head">
                       <h4>{submittedQuestion || "当前回答"}</h4>
-                      {isRunStreaming && <span className="streaming-tag">Streaming…</span>}
+                      {isRunStreaming && <span className="streaming-tag">生成中…</span>}
                     </div>
                     <Markdown content={streamedText} />
                   </article>
                 )}
                 {latestVerification && (
                   <details className="verification-banner"><summary>查看原文检查信息</summary>
-                    <strong>Latest verification</strong>
+                    <strong>最近原文检查</strong>
                     <div>{latestVerification.status}: {latestVerification.rationale}</div>
                   </details>
                 )}
             </div>
-            <div className="discussion-composer">                <p className="subtle">哪里还没懂？选择一个方向，或直接写下你的困惑。</p>
+            <div className="discussion-composer">
+              {uiError && <p className="error-notice" role="alert">{uiError}</p>}
+              {activeRun?.status === "failed" && <p className="error-notice" role="alert">{activeRun.error_message || "生成失败，请重试。"}</p>}                <p className="subtle">哪里还没懂？选择一个方向，或直接写下你的困惑。</p>
                 <details className="shortcut-picker" open={shortcutsOpen} onToggle={(event) => setShortcutsOpen(event.currentTarget.open)}><summary>提问方向 · 8 种</summary><div className="reading-shortcuts">
                   {[
                     ["通俗概括", "请用通俗语言解释论文的核心想法，先讲问题、直觉和价值，不展开实现细节。"],
@@ -747,38 +775,38 @@ export default function WorkspaceScreen() {
                     onChange={(event) => setQuestion(event.target.value)}
                   />
                   <button type="submit" disabled={loading || !question.trim()}>
-                    Ask
+                    发送问题
                   </button>
                 </form>
             </div>
           </section>
           <section id="tool-discovery" className="utility-content" hidden={activePanel !== "discovery"} aria-label="文献搜索">
-                <h3>Find Papers</h3>
+                <h3>发现相关研究</h3>
                 <form className="discovery-form" onSubmit={onDiscover}>
                   <input
-                    placeholder="Search papers, venues, or topics"
+                    aria-label="搜索论文" placeholder="搜索论文、主题或会议"
                     value={discoveryQuery}
                     onChange={(event) => setDiscoveryQuery(event.target.value)}
                   />
                   <div className="inline-controls">
-                    <select value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as typeof discoveryMode)}>
-                      <option value="latest_top_venues">Latest</option>
-                      <option value="seminal">Seminal</option>
-                      <option value="related">Related</option>
+                    <select aria-label="研究类型" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as typeof discoveryMode)}>
+                      <option value="latest_top_venues">最新研究</option>
+                      <option value="seminal">经典论文</option>
+                      <option value="related">相关研究</option>
                     </select>
-                    <select value={discoveryDomain} onChange={(event) => setDiscoveryDomain(event.target.value as typeof discoveryDomain)}>
-                      <option value="general">General</option>
-                      <option value="cs">CS</option>
-                      <option value="biomed">Biomed</option>
+                    <select aria-label="学科范围" value={discoveryDomain} onChange={(event) => setDiscoveryDomain(event.target.value as typeof discoveryDomain)}>
+                      <option value="general">全部学科</option>
+                      <option value="cs">计算机科学</option>
+                      <option value="biomed">生物医学</option>
                     </select>
                   </div>
                   <button type="submit" disabled={discoveryLoading || !discoveryQuery.trim()}>
-                    {discoveryLoading ? "Searching..." : "Search"}
+                    {discoveryLoading ? "搜索中…" : "搜索"}
                   </button>
                 </form>
                 {discoveryHistory.length > 0 && (
                   <div className="history-strip">
-                    {discoveryHistory.slice(-3).reverse().map((search) => (
+                    {[...discoveryHistory].reverse().map((search) => (
                       <button key={search.search_id} className="history-chip" onClick={() => setCurrentSearch(search)}>
                         {search.query}
                       </button>
@@ -794,20 +822,20 @@ export default function WorkspaceScreen() {
                           <span className="status-chip">{result.source_kind}</span>
                         </div>
                         <div className="meta-block">
-                          <span>{result.venue || "Unknown venue"}</span>
+                          <span>{result.venue || "未提供会议或期刊"}</span>
                           <span>{result.year ?? "N/A"}</span>
-                          <span>Citations: {result.citation_count ?? "N/A"}</span>
+                          <span>引用数：{result.citation_count ?? "N/A"}</span>
                         </div>
                         {result.summary && <p className="subtle">{result.summary}</p>}
                         <div className="link-row">
                           {result.landing_page_url && (
-                            <a href={result.landing_page_url} target="_blank" rel="noreferrer">Open Landing</a>
+                            <a href={result.landing_page_url} target="_blank" rel="noreferrer">查看原文</a>
                           )}
                           <button
                             onClick={() => void onLocalizeResult(result.result_id)}
                             disabled={localizingResultId === result.result_id || referenceIds.has(result.title.toLowerCase())}
                           >
-                            {referenceIds.has(result.title.toLowerCase()) ? "Localized" : (localizingResultId === result.result_id ? "Saving..." : "Localize Reference")}
+                            {referenceIds.has(result.title.toLowerCase()) ? "已保存" : (localizingResultId === result.result_id ? "保存中…" : "保存参考文献")}
                           </button>
                         </div>
                       </article>
@@ -818,9 +846,9 @@ export default function WorkspaceScreen() {
           </section>
           <section id="tool-files" className="utility-content" hidden={activePanel !== "files"} aria-label="会话文件">
             <section className="panel file-manager">
-              <h3>Current Session File Manager</h3>
+              <h3>会话文件</h3>
               {orderedFileCategories.length === 0 && (
-                <p className="subtle">No files yet. Upload papers to get started.</p>
+                <p className="subtle">尚无文件，添加论文后会在这里整理。</p>
               )}
               {orderedFileCategories.map((category) => {
                 const files = filesByCategory[category];
@@ -828,7 +856,7 @@ export default function WorkspaceScreen() {
                 return (
                   <div key={category} className="file-group">
                     <div className="file-group-head">
-                      <span className="file-group-icon">{meta.icon}</span>
+
                       <div>
                         <h4>
                           {meta.label}
@@ -853,7 +881,7 @@ export default function WorkspaceScreen() {
               })}
             </section>
             <section className="panel">
-              <h3>Localized References</h3>
+              <h3>已保存的参考文献</h3>
               <ul className="plain-list compact-list">
                 {selectedSession.artifacts.references.map((reference) => {
                   const primaryAccessUrl = getPrimaryAccessUrl(reference);
@@ -862,7 +890,7 @@ export default function WorkspaceScreen() {
                       <strong>{reference.title}</strong>
                       <div className="subtle">{reference.source_kind}</div>
                       {primaryAccessUrl && (
-                        <a href={primaryAccessUrl} target="_blank" rel="noreferrer">Open</a>
+                        <a href={primaryAccessUrl} target="_blank" rel="noreferrer">打开</a>
                       )}
                     </li>
                   );
@@ -876,7 +904,7 @@ export default function WorkspaceScreen() {
               <summary>运行详情（需要时展开）</summary>
               <div className="run-panel-header">
                 <div>
-                  <p className="eyebrow">Active Runtime</p>
+                  <p className="eyebrow">当前运行</p>
                   <h3>{activeRun?.mode ?? "recent"} run</h3>
                 </div>
                 <div className={`status-chip ${latestRunStatus === "running" ? "status-running" : latestRunStatus === "completed" ? "status-completed" : latestRunStatus === "failed" ? "status-failed" : ""}`}>
@@ -885,19 +913,19 @@ export default function WorkspaceScreen() {
               </div>
               {activeRun?.verification_state && (
                 <div className="meta-block">
-                  <span>Working state version: {activeRun.working_state_version}</span>
-                  <span>Verification state: {activeRun.verification_state}</span>
-                  <span>Background tasks: {activeRun.active_background_task_ids.length}</span>
+                  <span>工作状态版本：{activeRun.working_state_version}</span>
+                  <span>原文检查状态：{activeRun.verification_state}</span>
+                  <span>后台任务：{activeRun.active_background_task_ids.length}</span>
                 </div>
               )}
               {isRunStreaming && (
                 <div className="streaming-indicator">
                   <span className="streaming-dot" />
-                  Streaming response… see “读懂这篇论文” below.
+                  正在生成，内容将显示在导读或讨论区。
                 </div>
               )}
               {visibleRunEvents.length === 0 ? (
-                <p className="subtle">Run events will appear here.</p>
+                <p className="subtle">处理过程会显示在这里。</p>
               ) : (
                 <div className="event-feed">
                   {visibleRunEvents.map((event) => {
@@ -918,7 +946,7 @@ export default function WorkspaceScreen() {
 
           <div className="task-list">
             {visibleTasks.length === 0 ? (
-              <p className="subtle">No background tasks yet.</p>
+              <p className="subtle">目前没有后台任务。</p>
             ) : (
               visibleTasks.map((task) => (
                 <article key={task.task_id} className="task-card">
@@ -948,7 +976,7 @@ export default function WorkspaceScreen() {
                   </div>
                   <div className="task-actions">
                     {!isTaskTerminal(task) && (
-                      <button onClick={() => void onStopTask(task.task_id)}>Stop Task</button>
+                      <button onClick={() => void onStopTask(task.task_id)}>停止任务</button>
                     )}
                   </div>
                 </article>

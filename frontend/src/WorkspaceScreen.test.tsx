@@ -176,11 +176,43 @@ describe("WorkspaceScreen", () => {
 
     expect((await screen.findAllByText("Test Session")).length).toBeGreaterThan(0);
     expect(screen.getByText("生成阅读导引")).toBeInTheDocument();
-    expect(screen.getByText("Current Session File Manager")).not.toBeVisible();
+    expect(screen.getByText("会话文件")).not.toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "文件" }));
-    expect(screen.getByText("Current Session File Manager")).toBeVisible();
+    expect(screen.getByText("会话文件")).toBeVisible();
     expect(mockedApi.listSessions).toHaveBeenCalled();
     expect(mockedApi.getSession).toHaveBeenCalledWith("session-1");
+  });
+
+  it("retains session creation with reading background and goal", async () => {
+    mockedApi.createSession.mockResolvedValueOnce(sessionDetail);
+    render(<WorkspaceScreen />);
+    await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByRole("button", { name: "所有会话" }));
+    fireEvent.change(screen.getByLabelText("会话名称"), { target: { value: "My reading" } });
+    fireEvent.change(screen.getByLabelText("分类标签"), { target: { value: "theory, ml" } });
+    fireEvent.change(screen.getByLabelText("阅读背景"), { target: { value: "PhD student" } });
+    fireEvent.change(screen.getByLabelText("阅读目标"), { target: { value: "Understand assumptions" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    await waitFor(() => expect(mockedApi.createSession).toHaveBeenCalledWith({
+      session_name: "My reading", categories: ["theory", "ml"], background: "PhD student", user_goal: "Understand assumptions",
+    }));
+    expect(await screen.findByRole("button", { name: "生成阅读导引" })).toBeVisible();
+  });
+
+  it("retains multi-file upload and the archive operation", async () => {
+    mockedApi.uploadPapers.mockResolvedValueOnce(sessionDetail);
+    render(<WorkspaceScreen />);
+    await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByText("添加论文"));
+    const files = [new File(["first"], "first.txt"), new File(["second"], "second.txt")];
+    fireEvent.change(screen.getByLabelText("选择论文文件"), { target: { files } });
+    fireEvent.click(screen.getByRole("button", { name: "上传论文" }));
+    await waitFor(() => expect(mockedApi.uploadPapers).toHaveBeenCalledWith("session-1", files));
+    await waitFor(() => expect(screen.getByRole("button", { name: "归档" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "归档" }));
+    await waitFor(() => expect(mockedApi.createRun).toHaveBeenCalledWith("session-1", {
+      mode: "archive", input: "build archive", preferred_paper_ids: [],
+    }));
   });
 
   it("preserves drafts and search filters when switching and closing panels", async () => {
@@ -190,7 +222,7 @@ describe("WorkspaceScreen", () => {
     const draft = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
     fireEvent.change(draft, { target: { value: "Explain this assumption" } });
     fireEvent.click(screen.getByRole("button", { name: "找论文" }));
-    const search = screen.getByPlaceholderText("Search papers, venues, or topics");
+    const search = screen.getByPlaceholderText("搜索论文、主题或会议");
     fireEvent.change(search, { target: { value: "preference learning" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭辅助面板" }));
     expect(search).not.toBeVisible();
@@ -222,7 +254,7 @@ describe("WorkspaceScreen", () => {
     expect(screen.getByRole("link", { name: "核心论证" })).toHaveAttribute("href", "#section-second-0");
     fireEvent.click(screen.getByRole("button", { name: "讨论" }));
     fireEvent.change(screen.getByLabelText("论文问题"), { target: { value: "Explain this paper" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     await waitFor(() => expect(mockedApi.createRun).toHaveBeenCalledWith("session-1", {
       mode: "answer", input: "Explain this paper", preferred_paper_ids: ["p2"],
     }));
@@ -234,7 +266,7 @@ describe("WorkspaceScreen", () => {
     await screen.findAllByText("Test Session");
     fireEvent.click(screen.getByRole("button", { name: "讨论" }));
     fireEvent.change(screen.getByLabelText("论文问题"), { target: { value: "Explain the assumption" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Network unavailable");
     expect(screen.getByLabelText("论文问题")).toHaveValue("Explain the assumption");
   });
@@ -287,14 +319,14 @@ describe("WorkspaceScreen", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: /任务/ }));
-    expect(await screen.findByText("Active Runtime")).toBeInTheDocument();
+    expect(await screen.findByText("当前运行")).toBeInTheDocument();
     expect(await screen.findByText("Complete method explanation")).toBeInTheDocument();
     expect(screen.queryByText("Streaming output")).not.toBeInTheDocument();
     // Token-level deltas are filtered out of the runtime feed; only lifecycle
     // events are shown with human-readable titles.
     expect(screen.queryByText("Delta: Streaming output")).not.toBeInTheDocument();
-    expect(await screen.findByText("Run started")).toBeInTheDocument();
-    expect(await screen.findByText("Run completed")).toBeInTheDocument();
+    expect(await screen.findByText("开始处理")).toBeInTheDocument();
+    expect(await screen.findByText("处理完成")).toBeInTheDocument();
     await waitFor(() => expect(source.closed).toBe(true));
   });
 
@@ -330,10 +362,10 @@ describe("WorkspaceScreen", () => {
 
     await screen.findAllByText("Test Session");
     fireEvent.click(screen.getByRole("button", { name: "找论文" }));
-    fireEvent.change(screen.getByPlaceholderText("Search papers, venues, or topics"), {
+    fireEvent.change(screen.getByPlaceholderText("搜索论文、主题或会议"), {
       target: { value: "transformer" },
     });
-    fireEvent.click(screen.getByText("Search"));
+    fireEvent.click(screen.getByText("搜索"));
 
     await waitFor(() => expect(mockedApi.discoverLiterature).toHaveBeenCalledWith("session-1", {
       query: "transformer",
@@ -344,8 +376,10 @@ describe("WorkspaceScreen", () => {
     }));
 
     expect(await screen.findByText("Attention Is All You Need")).toBeInTheDocument();
-    expect(await screen.findByText("Open Landing")).toBeInTheDocument();
-    expect(await screen.findByText("Localize Reference")).toBeInTheDocument();
+    expect(await screen.findByText("查看原文")).toBeInTheDocument();
+    expect(await screen.findByText("保存参考文献")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存参考文献" }));
+    await waitFor(() => expect(mockedApi.localizeDiscoveryReference).toHaveBeenCalledWith("session-1", "search-1", "result-1"));
   });
 
   it("shows the background task drawer and allows stopping a task", async () => {
@@ -388,7 +422,7 @@ describe("WorkspaceScreen", () => {
     });
 
     expect(await screen.findByText("ready_for_merge (55%)")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Stop Task"));
+    fireEvent.click(screen.getByText("停止任务"));
     await waitFor(() => expect(mockedApi.stopTask).toHaveBeenCalledWith("session-1", "task-1"));
   });
 });
