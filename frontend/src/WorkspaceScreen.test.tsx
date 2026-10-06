@@ -177,7 +177,7 @@ describe("WorkspaceScreen", () => {
     expect((await screen.findAllByText("Test Session")).length).toBeGreaterThan(0);
     expect(screen.getByText("生成阅读导引")).toBeInTheDocument();
     expect(screen.getByText("Current Session File Manager")).not.toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "文件", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "文件" }));
     expect(screen.getByText("Current Session File Manager")).toBeVisible();
     expect(mockedApi.listSessions).toHaveBeenCalled();
     expect(mockedApi.getSession).toHaveBeenCalledWith("session-1");
@@ -186,19 +186,57 @@ describe("WorkspaceScreen", () => {
   it("preserves drafts and search filters when switching and closing panels", async () => {
     render(<WorkspaceScreen />);
     await screen.findAllByText("Test Session");
-    fireEvent.click(screen.getByRole("button", { name: "讨论", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "讨论" }));
     const draft = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
     fireEvent.change(draft, { target: { value: "Explain this assumption" } });
-    fireEvent.click(screen.getByRole("button", { name: "找论文", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "找论文" }));
     const search = screen.getByPlaceholderText("Search papers, venues, or topics");
     fireEvent.change(search, { target: { value: "preference learning" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭辅助面板" }));
     expect(search).not.toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "讨论", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "讨论" }));
     expect(draft).toHaveValue("Explain this assumption");
-    fireEvent.click(screen.getByRole("button", { name: "找论文", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "找论文" }));
     expect(search).toHaveValue("preference learning");
     expect(mockedApi.createRun).not.toHaveBeenCalled();
+  });
+
+  it("switches between single-paper guides, comparison and historical versions", async () => {
+    const guide = (id: string, paper_ids: string[], title: string) => ({ analysis_id: id, paper_ids, title,
+      markdown_path: "guide.md", created_at: "2026-04-13T00:00:00Z",
+      sections: [{ key: "core", title: "核心论证", content: `${id} explanation` }] });
+    mockedApi.getSession.mockResolvedValue({ ...sessionDetail, artifacts: { ...sessionDetail.artifacts,
+      papers: [...sessionDetail.artifacts.papers, { paper_id: "p2", filename: "second.pdf", title: "Second Paper", original_path: "second.pdf" }],
+      analyses: [guide("first", ["paper-1"], "First Guide"), guide("second", ["p2"], "Second Guide"), guide("both", ["paper-1", "p2"], "Comparison")],
+    }});
+    render(<WorkspaceScreen />);
+    expect(await screen.findByText("both explanation")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Sample Paper" }));
+    expect(screen.getByText("first explanation")).toBeVisible();
+    expect(screen.queryByText("both explanation")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "跨篇比较" }));
+    expect(screen.getByText("both explanation")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("选择导读或历史版本"), { target: { value: "second" } });
+    expect(screen.getByText("second explanation")).toBeVisible();
+    fireEvent.click(screen.getByText("章节目录 · 1"));
+    expect(screen.getByRole("link", { name: "核心论证" })).toHaveAttribute("href", "#section-second-0");
+    fireEvent.click(screen.getByRole("button", { name: "讨论" }));
+    fireEvent.change(screen.getByLabelText("论文问题"), { target: { value: "Explain this paper" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    await waitFor(() => expect(mockedApi.createRun).toHaveBeenCalledWith("session-1", {
+      mode: "answer", input: "Explain this paper", preferred_paper_ids: ["p2"],
+    }));
+  });
+
+  it("keeps the question available after a failed request", async () => {
+    mockedApi.createRun.mockRejectedValueOnce(new Error("Network unavailable"));
+    render(<WorkspaceScreen />);
+    await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByRole("button", { name: "讨论" }));
+    fireEvent.change(screen.getByLabelText("论文问题"), { target: { value: "Explain the assumption" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Network unavailable");
+    expect(screen.getByLabelText("论文问题")).toHaveValue("Explain the assumption");
   });
 
   it("streams run output and shows runtime events", async () => {
@@ -263,10 +301,12 @@ describe("WorkspaceScreen", () => {
   it("puts a teaching shortcut into the editable question without starting a run", async () => {
     render(<WorkspaceScreen />);
     await screen.findAllByText("Test Session");
-    fireEvent.click(screen.getByRole("button", { name: "讨论", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "讨论" }));
+    fireEvent.click(screen.getByText("提问方向 · 8 种"));
     fireEvent.click(screen.getByRole("button", { name: "举个例子" }));
     const input = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
     expect((input as HTMLTextAreaElement).value).toContain("论文中的一个例子");
+    fireEvent.click(screen.getByText("提问方向 · 8 种"));
     fireEvent.click(screen.getByRole("button", { name: "理清论证" }));
     expect((input as HTMLTextAreaElement).value).toContain("前提如何通向结论");
     expect(input).toHaveFocus();
@@ -289,7 +329,7 @@ describe("WorkspaceScreen", () => {
     render(<WorkspaceScreen />);
 
     await screen.findAllByText("Test Session");
-    fireEvent.click(screen.getByRole("button", { name: "找论文", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "找论文" }));
     fireEvent.change(screen.getByPlaceholderText("Search papers, venues, or topics"), {
       target: { value: "transformer" },
     });

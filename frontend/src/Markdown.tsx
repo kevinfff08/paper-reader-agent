@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
+
+const MathFormula = lazy(() => import("./MathFormula"));
 
 // Lightweight, dependency-free Markdown renderer. Supports the subset that the
 // analysis / QA pipeline emits: headings, bold, italic, inline code, links,
@@ -8,7 +10,7 @@ import type { ReactNode } from "react";
 const INLINE_PATTERN =
   /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\*([^*]+)\*)|(_([^_]+)_)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
 
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
+function renderTextInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
   let token = 0;
@@ -39,6 +41,29 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   if (lastIndex < text.length) {
     nodes.push(text.slice(lastIndex));
   }
+  return nodes;
+}
+
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  // Protect math from Markdown emphasis (notably underscores and asterisks).
+  const pattern = /(`[^`]+`)|(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^\n$]+?\$)/g;
+  const nodes: ReactNode[] = [];
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index!;
+    nodes.push(...renderTextInline(text.slice(offset, start), `${keyPrefix}-${offset}`));
+    const raw = match[0];
+    if (match[1]) nodes.push(...renderTextInline(raw, `${keyPrefix}-code-${start}`));
+    else {
+      const display = raw.startsWith("$$") || raw.startsWith("\\[");
+      const delimiter = raw.startsWith("$") && !display ? 1 : 2;
+      nodes.push(<Suspense key={`${keyPrefix}-math-${start}`} fallback={<code>{raw}</code>}>
+        <MathFormula source={raw.slice(delimiter, -delimiter)} display={display} />
+      </Suspense>);
+    }
+    offset = start + raw.length;
+  }
+  nodes.push(...renderTextInline(text.slice(offset), `${keyPrefix}-${offset}`));
   return nodes;
 }
 
@@ -87,6 +112,16 @@ export default function Markdown({
       }
       if (index < lines.length) index += 1;
       blocks.push(<pre key={`code${key++}`}><code>{code.join("\n")}</code></pre>);
+      continue;
+    }
+
+    if (trimmed.startsWith("$$") || trimmed.startsWith("\\[")) {
+      flushParagraph();
+      const closing = trimmed.startsWith("$$") ? "$$" : "\\]";
+      let expression = trimmed;
+      index += 1;
+      while (expression.indexOf(closing, 2) < 0 && index < lines.length) expression += "\n" + lines[index++];
+      blocks.push(<div key={`math${key++}`}>{renderInline(expression, `display-${key}`)}</div>);
       continue;
     }
 

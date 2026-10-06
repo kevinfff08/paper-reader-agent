@@ -194,6 +194,14 @@ export default function WorkspaceScreen() {
   const [readerBackground, setReaderBackground] = useState("");
   const [readingGoal, setReadingGoal] = useState("");
   const [categories, setCategories] = useState("");
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
+  const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [submittedQuestion, setSubmittedQuestion] = useState("");
+  const [uiError, setUiError] = useState<string | null>(null);
+  const selectedSessionIdRef = useRef<string | null>(null);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  const readingPositions = useRef<Record<string, number>>({});
   const [focusQuestion, setFocusQuestion] = useState("");
   const [question, setQuestion] = useState("");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -222,6 +230,17 @@ export default function WorkspaceScreen() {
       return;
     }
     const detail = await getSession(targetId);
+    if (selectedSessionIdRef.current !== detail.session.session_id) {
+      runSourceRef.current?.close();
+      taskSourcesRef.current.forEach((source) => source.close());
+      taskSourcesRef.current.clear();
+      selectedSessionIdRef.current = detail.session.session_id;
+      setSelectedAnalysisId(null); setSelectedPaperId(null);
+      setQuestion(""); setSubmittedQuestion(""); setFocusQuestion(""); setStreamedText("");
+      setRunEvents([]); setActiveRun(null); setTaskEvents({}); setUploadFiles([]);
+      setCurrentSearch(detail.artifacts.literature_searches[detail.artifacts.literature_searches.length - 1] ?? null);
+      setDiscoveryQuery(""); setLoading(false); setUiError(null);
+    }
     setSelectedSession(detail);
     if (detail.artifacts.literature_searches.length > 0 && !currentSearch) {
       setCurrentSearch(detail.artifacts.literature_searches[detail.artifacts.literature_searches.length - 1] ?? null);
@@ -353,11 +372,12 @@ export default function WorkspaceScreen() {
     setLoading(true);
     setStreamedText("");
     setRunEvents([]);
+    setUiError(null);
     try {
       const response = await createRun(selectedSession.session.session_id, {
         mode,
         input,
-        preferred_paper_ids: []
+        preferred_paper_ids: mode === "answer" ? latestAnalysis?.paper_ids ?? (selectedPaperId ? [selectedPaperId] : []) : []
       });
       setActiveRun(response.run);
       await refreshSessions(selectedSession.session.session_id);
@@ -380,6 +400,7 @@ export default function WorkspaceScreen() {
           source.close();
           runSourceRef.current = null;
           void refreshSessions(selectedSession.session.session_id);
+          if (event.event_type === "run_completed" && mode === "answer") { setQuestion(""); setSubmittedQuestion(""); setStreamedText(""); }
           setLoading(false);
           setActiveRun((current) =>
             current ? { ...current, status: event.event_type === "run_completed" ? "completed" : "failed",
@@ -391,14 +412,16 @@ export default function WorkspaceScreen() {
         source.close();
         runSourceRef.current = null;
         setLoading(false);
+        setUiError("连接中断，请在任务面板检查运行状态后重试；提问内容已保留。");
       };
     } catch (error) {
       setLoading(false);
-      throw error;
+      setUiError(error instanceof Error ? error.message : "请求失败，请稍后重试。");
     }
   }
 
   async function onAnalyze() {
+    setSelectedAnalysisId(null); setSelectedPaperId(null);
     await startStreamingRun("analyze", focusQuestion.trim());
   }
 
@@ -408,7 +431,7 @@ export default function WorkspaceScreen() {
       return;
     }
     const nextQuestion = question.trim();
-    setQuestion("");
+    setSubmittedQuestion(nextQuestion);
     await startStreamingRun("answer", nextQuestion);
   }
 
@@ -459,7 +482,17 @@ export default function WorkspaceScreen() {
   }
 
   const analyses = selectedSession?.artifacts.analyses ?? [];
-  const latestAnalysis: AnalysisArtifact | undefined = analyses[analyses.length - 1];
+  const latestAnalysis: AnalysisArtifact | undefined = selectedAnalysisId
+    ? analyses.find((item) => item.analysis_id === selectedAnalysisId)
+    : selectedPaperId ? [...analyses].reverse().find((item) => item.paper_ids.length === 1 && item.paper_ids[0] === selectedPaperId)
+    : analyses[analyses.length - 1];
+  const comparisonAnalysis = [...analyses].reverse().find((item) => item.paper_ids.length > 1);
+  const singleAnalysis = [...analyses].reverse().find((item) => item.paper_ids.length === 1);
+  const readingKey = `${selectedSession?.session.session_id}:${latestAnalysis?.analysis_id ?? selectedPaperId ?? "empty"}`;
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (workspace) workspace.scrollTop = readingPositions.current[readingKey] ?? 0;
+  }, [readingKey]);
   const qaRecords: QARecord[] = selectedSession?.artifacts.qa_records ?? [];
   const latestRunStatus = activeRun?.status ?? selectedSession?.artifacts.runs[0]?.status ?? null;
   const discoveryHistory = selectedSession?.artifacts.literature_searches ?? [];
@@ -569,7 +602,8 @@ export default function WorkspaceScreen() {
           <p className="subtle">{selectedSession.session.categories.join(" / ") || "未分类"}</p>
           <div className="nav-section-label">论文 · {selectedSession.artifacts.papers.length}</div>
           <ul className="paper-nav-list">{selectedSession.artifacts.papers.map((paper) =>
-            <li key={paper.paper_id}>{cleanPaperName(paper.title || paper.filename)}</li>)}</ul>
+            <li key={paper.paper_id}><button className="paper-nav-button" aria-current={latestAnalysis?.paper_ids.length === 1 && latestAnalysis.paper_ids[0] === paper.paper_id ? "page" : undefined}
+              onClick={() => { setSelectedPaperId(paper.paper_id); setSelectedAnalysisId(null); }}>{cleanPaperName(paper.title || paper.filename)}</button></li>)}</ul>
           <details className="upload-control"><summary>添加论文</summary>
             <input aria-label="选择论文文件" type="file" multiple onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))} />
             <button onClick={() => void onUpload()} disabled={loading || uploadFiles.length === 0}>上传论文</button>
@@ -580,7 +614,7 @@ export default function WorkspaceScreen() {
           </details>
         </> : <p className="subtle">创建会话，开始阅读。</p>}
       </aside>
-      <main className="reader-workspace">
+      <main className="reader-workspace" ref={workspaceRef} onScroll={(event) => { readingPositions.current[readingKey] = event.currentTarget.scrollTop; }}>
         <header className="reader-toolbar">
           <span className="reader-location">阅读工作台</span>
           <nav className="utility-tabs" aria-label="阅读工具">{tools.map(([key, label]) =>
@@ -591,6 +625,17 @@ export default function WorkspaceScreen() {
         {selectedSession ? <>
           <div className="reader-status" role="status">{isRunStreaming ? "正在生成，请稍候…" : latestRunStatus === "failed" ? "生成未完成，请查看错误信息" : ""}</div>
           <div className="reading-document">
+            <div className="reading-view-switch" aria-label="导读视图">
+              <button className="secondary-button" aria-pressed={!!latestAnalysis && latestAnalysis.paper_ids.length === 1} disabled={!singleAnalysis}
+                onClick={() => { setSelectedPaperId(null); setSelectedAnalysisId(singleAnalysis?.analysis_id ?? null); }}>单篇导读</button>
+              <button className="secondary-button" aria-pressed={!!latestAnalysis && latestAnalysis.paper_ids.length > 1} disabled={!comparisonAnalysis}
+                onClick={() => { setSelectedPaperId(null); setSelectedAnalysisId(comparisonAnalysis?.analysis_id ?? null); }}>跨篇比较</button>
+              {analyses.length > 0 && <select aria-label="选择导读或历史版本" value={latestAnalysis?.analysis_id ?? ""}
+                onChange={(event) => { setSelectedPaperId(null); setSelectedAnalysisId(event.target.value); }}>
+                {!latestAnalysis && <option value="">选择已有导读</option>}
+                {[...analyses].reverse().map((item) => <option key={item.analysis_id} value={item.analysis_id}>{item.title.replace(/^Single-Paper Analysis: /, "")} · {new Date(item.created_at).toLocaleString()}</option>)}
+              </select>}
+            </div>
                 <div className="analysis-actions">
                   <input
                     placeholder="你最想弄懂什么？（可选）"
@@ -601,7 +646,12 @@ export default function WorkspaceScreen() {
                     生成阅读导引
                   </button>
                 </div>
-                <h3>读懂这篇论文</h3>
+                <header className="document-heading"><p className="eyebrow">{latestAnalysis?.paper_ids.length && latestAnalysis.paper_ids.length > 1 ? "跨篇比较" : "研究导读"}</p>
+                  <h1>{latestAnalysis?.title.replace(/^Single-Paper Analysis: /, "").replace(/^Cross-Paper Synthesis$/, "把几篇论文串起来理解") || "从一个好问题开始"}</h1></header>
+                {uiError && <p className="error-notice" role="alert">{uiError}</p>}
+                {latestAnalysis && <details className="document-outline"><summary>章节目录 · {latestAnalysis.sections.length}</summary><nav aria-label="章节目录">
+                  {latestAnalysis.sections.map((section, index) => <a key={section.key} href={`#section-${latestAnalysis.analysis_id}-${index}`}>{section.title}</a>)}
+                </nav></details>}
                 {activeRun?.status === "failed" && (
                   <p role="alert">{activeRun.error_message || "生成失败，请检查模型配置后重试。"}</p>
                 )}
@@ -614,17 +664,17 @@ export default function WorkspaceScreen() {
                     <Markdown content={streamedText} />
                   </article>
                 ) : latestAnalysis ? (
-                  latestAnalysis.sections.map((section) => {
+                  latestAnalysis.sections.map((section, index) => {
                     const startsWithHeading = section.content.trim().startsWith("#");
                     return (
-                      <article key={section.key} className="analysis-section">
+                      <article key={section.key} id={`section-${latestAnalysis.analysis_id}-${index}`} className="analysis-section">
                         {!startsWithHeading && <h4>{section.title}</h4>}
                         <Markdown content={section.content} />
                       </article>
                     );
                   })
                 ) : (
-                  <p className="subtle">Upload papers and run analysis to populate this workspace.</p>
+                  <p className="subtle">这篇论文还没有导读。可以添加论文并生成导读，或从上方选择已有版本。</p>
                 )}
 
           </div>
@@ -640,48 +690,8 @@ export default function WorkspaceScreen() {
         </header>
         {selectedSession && <>
           <section id="tool-discussion" className="utility-content" hidden={activePanel !== "discussion"} aria-label="论文讨论">
-                <p className="subtle">哪里还没懂？选择一个方向，或直接写下你的困惑。</p>
-                <div className="reading-shortcuts">
-                  {[
-                    ["通俗概括", "请用通俗语言解释论文的核心想法，先讲问题、直觉和价值，不展开实现细节。"],
-                    ["理清论证", "这篇论文最关键的思想转折是什么？请根据它实际使用的推导、反例或实验，解释前提如何通向结论，而不只是罗列方法步骤。"],
-                    ["举个例子", "请优先用论文中的一个例子解释刚才讨论的核心思想。如果需要自拟教学示例，请标明，并说明它能解释什么、不能说明什么。"],
-                    ["解释公式", "请解释论文的关键公式：它在论证中起什么作用、依赖哪些前提、每个符号是什么意思，以及直觉。若有多个公式，先讲最核心的一个。"],
-                    ["看懂贡献", "相对论文讨论的已有工作，它改变了哪个假设、方法或认识？请讲清真正的新意以及没有解决的问题，不只比较工程复杂度。"],
-                    ["看懂实验", "请选择一个决定性的实验，解释改变与固定了什么、对照为何合理、结果支持哪项主张，以及哪些解释还不能排除。"],
-                    ["研究启发", "从本文一个具体未决问题出发，提出一个后续研究问题，并说明怎样用最小对照或推导区分两种可能解释。请区分论文结论与你的推测，不宣称已验证新颖性。"],
-                    ["检查理解", "请围绕论文核心思想给我三个自测问题，先不要给答案，等我回答后再帮我纠正。"],
-                  ].map(([label, prompt]) => (
-                    <button type="button" className="secondary-button" key={label} disabled={loading}
-                      onClick={() => { setQuestion(prompt); questionInputRef.current?.focus(); }}>{label}</button>
-                  ))}
-                </div>
-                <form onSubmit={onAskQuestion} className="qa-form">
-                  <textarea
-                    ref={questionInputRef}
-                    placeholder="例如：为什么要加这一步？我不理解这个公式的直觉。"
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                  />
-                  <button type="submit" disabled={loading || !question.trim()}>
-                    Ask
-                  </button>
-                </form>
-                {activeRun?.mode === "answer" && streamedText && (
-                  <article className="qa-card streaming-card">
-                    <div className="analysis-section-head">
-                      <h4>Streaming Answer</h4>
-                      {isRunStreaming && <span className="streaming-tag">Streaming…</span>}
-                    </div>
-                    <Markdown content={streamedText} />
-                  </article>
-                )}
-                {latestVerification && (
-                  <details className="verification-banner"><summary>查看原文检查信息</summary>
-                    <strong>Latest verification</strong>
-                    <div>{latestVerification.status}: {latestVerification.rationale}</div>
-                  </details>
-                )}
+            <div className="discussion-history">
+              {qaRecords.length === 0 && !streamedText && <div className="discussion-empty"><h3>从不懂的地方开始</h3><p>一个概念、一步推导，或两篇论文之间的分歧。</p></div>}
                 <div className="qa-list">
                   {qaRecords.map((record) => (
                     <article key={record.question_id} className="qa-card">
@@ -696,6 +706,51 @@ export default function WorkspaceScreen() {
                   ))}
                 </div>
 
+                {activeRun?.mode === "answer" && streamedText && (
+                  <article className="qa-card streaming-card">
+                    <div className="analysis-section-head">
+                      <h4>{submittedQuestion || "当前回答"}</h4>
+                      {isRunStreaming && <span className="streaming-tag">Streaming…</span>}
+                    </div>
+                    <Markdown content={streamedText} />
+                  </article>
+                )}
+                {latestVerification && (
+                  <details className="verification-banner"><summary>查看原文检查信息</summary>
+                    <strong>Latest verification</strong>
+                    <div>{latestVerification.status}: {latestVerification.rationale}</div>
+                  </details>
+                )}
+            </div>
+            <div className="discussion-composer">                <p className="subtle">哪里还没懂？选择一个方向，或直接写下你的困惑。</p>
+                <details className="shortcut-picker" open={shortcutsOpen} onToggle={(event) => setShortcutsOpen(event.currentTarget.open)}><summary>提问方向 · 8 种</summary><div className="reading-shortcuts">
+                  {[
+                    ["通俗概括", "请用通俗语言解释论文的核心想法，先讲问题、直觉和价值，不展开实现细节。"],
+                    ["理清论证", "这篇论文最关键的思想转折是什么？请根据它实际使用的推导、反例或实验，解释前提如何通向结论，而不只是罗列方法步骤。"],
+                    ["举个例子", "请优先用论文中的一个例子解释刚才讨论的核心思想。如果需要自拟教学示例，请标明，并说明它能解释什么、不能说明什么。"],
+                    ["解释公式", "请解释论文的关键公式：它在论证中起什么作用、依赖哪些前提、每个符号是什么意思，以及直觉。若有多个公式，先讲最核心的一个。"],
+                    ["看懂贡献", "相对论文讨论的已有工作，它改变了哪个假设、方法或认识？请讲清真正的新意以及没有解决的问题，不只比较工程复杂度。"],
+                    ["看懂实验", "请选择一个决定性的实验，解释改变与固定了什么、对照为何合理、结果支持哪项主张，以及哪些解释还不能排除。"],
+                    ["研究启发", "从本文一个具体未决问题出发，提出一个后续研究问题，并说明怎样用最小对照或推导区分两种可能解释。请区分论文结论与你的推测，不宣称已验证新颖性。"],
+                    ["检查理解", "请围绕论文核心思想给我三个自测问题，先不要给答案，等我回答后再帮我纠正。"],
+                  ].map(([label, prompt]) => (
+                    <button type="button" className="secondary-button" key={label} disabled={loading}
+                      onClick={() => { setQuestion(prompt); setShortcutsOpen(false); questionInputRef.current?.focus(); }}>{label}</button>
+                  ))}
+                </div></details>
+                <form onSubmit={onAskQuestion} className="qa-form">
+                  <textarea
+                    ref={questionInputRef}
+                    aria-label="论文问题" disabled={loading}
+                    placeholder="例如：为什么要加这一步？我不理解这个公式的直觉。"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                  />
+                  <button type="submit" disabled={loading || !question.trim()}>
+                    Ask
+                  </button>
+                </form>
+            </div>
           </section>
           <section id="tool-discovery" className="utility-content" hidden={activePanel !== "discovery"} aria-label="文献搜索">
                 <h3>Find Papers</h3>
