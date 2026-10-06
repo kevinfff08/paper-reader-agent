@@ -175,7 +175,7 @@ describe("WorkspaceScreen", () => {
     render(<WorkspaceScreen />);
 
     expect((await screen.findAllByText("Test Session")).length).toBeGreaterThan(0);
-    expect(screen.getByText("Analyze Session")).toBeInTheDocument();
+    expect(screen.getByText("生成阅读导引")).toBeInTheDocument();
     expect(screen.getByText("Current Session File Manager")).toBeInTheDocument();
     expect(mockedApi.listSessions).toHaveBeenCalled();
     expect(mockedApi.getSession).toHaveBeenCalledWith("session-1");
@@ -185,7 +185,7 @@ describe("WorkspaceScreen", () => {
     render(<WorkspaceScreen />);
 
     await screen.findAllByText("Test Session");
-    fireEvent.click(screen.getByText("Analyze Session"));
+    fireEvent.click(screen.getByText("生成阅读导引"));
 
     await waitFor(() => expect(mockedApi.createRun).toHaveBeenCalledWith("session-1", {
       mode: "analyze",
@@ -193,6 +193,13 @@ describe("WorkspaceScreen", () => {
       preferred_paper_ids: [],
     }));
 
+    mockedApi.getSession.mockResolvedValue({ ...sessionDetail, artifacts: {
+      ...sessionDetail.artifacts,
+      analyses: [{ analysis_id: "a", paper_ids: ["paper-1"],
+        title: "Reading guide", markdown_path: "guide.md", created_at: "2026-04-13T00:00:00Z",
+        sections: [{ key: "core_contribution", title: "Overview", content: "Complete guide overview" },
+                   { key: "method_details", title: "Method", content: "Complete method explanation" }] }],
+    }});
     const source = MockEventSource.instances[0];
     await act(async () => {
       source.emit({
@@ -222,13 +229,36 @@ describe("WorkspaceScreen", () => {
     });
 
     expect(await screen.findByText("Active Runtime")).toBeInTheDocument();
-    expect((await screen.findAllByText("Streaming output")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("Complete method explanation")).toBeInTheDocument();
+    expect(screen.queryByText("Streaming output")).not.toBeInTheDocument();
     // Token-level deltas are filtered out of the runtime feed; only lifecycle
     // events are shown with human-readable titles.
     expect(screen.queryByText("Delta: Streaming output")).not.toBeInTheDocument();
     expect(await screen.findByText("Run started")).toBeInTheDocument();
     expect(await screen.findByText("Run completed")).toBeInTheDocument();
     await waitFor(() => expect(source.closed).toBe(true));
+  });
+
+  it("puts a teaching shortcut into the editable question without starting a run", async () => {
+    render(<WorkspaceScreen />);
+    await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByRole("button", { name: "举个例子" }));
+    const input = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
+    expect((input as HTMLTextAreaElement).value).toContain("具体的小例子");
+    expect(input).toHaveFocus();
+    expect(mockedApi.createRun).not.toHaveBeenCalled();
+  });
+
+  it("shows model failures beside the reading content even when details are collapsed", async () => {
+    render(<WorkspaceScreen />);
+    await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByText("生成阅读导引"));
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    await act(async () => MockEventSource.instances[0].emit({
+      event_id: "failed", run_id: "run-1", sequence_number: 1, event_type: "run_failed",
+      payload: { error: "模型不可用，请检查模型名称" }, created_at: "2026-04-13T00:00:03Z",
+    }));
+    expect(screen.getByRole("alert")).toHaveTextContent("模型不可用，请检查模型名称");
   });
 
   it("supports discovery search and renders result actions", async () => {

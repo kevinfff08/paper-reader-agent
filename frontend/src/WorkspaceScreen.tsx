@@ -191,6 +191,8 @@ export default function WorkspaceScreen() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionDetailResponse | null>(null);
   const [sessionName, setSessionName] = useState("");
+  const [readerBackground, setReaderBackground] = useState("");
+  const [readingGoal, setReadingGoal] = useState("");
   const [categories, setCategories] = useState("");
   const [focusQuestion, setFocusQuestion] = useState("");
   const [question, setQuestion] = useState("");
@@ -207,6 +209,7 @@ export default function WorkspaceScreen() {
   const [localizingResultId, setLocalizingResultId] = useState<string | null>(null);
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const [taskEvents, setTaskEvents] = useState<Record<string, TaskEvent[]>>({});
+  const questionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const runSourceRef = useRef<EventSource | null>(null);
   const taskSourcesRef = useRef<Map<string, EventSource>>(new Map());
 
@@ -313,10 +316,14 @@ export default function WorkspaceScreen() {
     try {
       const detail = await createSession({
         session_name: sessionName.trim(),
-        categories: categories.split(",").map((item) => item.trim()).filter(Boolean)
+        categories: categories.split(",").map((item) => item.trim()).filter(Boolean),
+        background: readerBackground.trim() || undefined,
+        user_goal: readingGoal.trim() || undefined
       });
       setSessionName("");
       setCategories("");
+      setReaderBackground("");
+      setReadingGoal("");
       setCurrentSearch(null);
       setView("workspace");
       await refreshSessions(detail.session.session_id);
@@ -376,7 +383,8 @@ export default function WorkspaceScreen() {
           void refreshSessions(selectedSession.session.session_id);
           setLoading(false);
           setActiveRun((current) =>
-            current ? { ...current, status: event.event_type === "run_completed" ? "completed" : "failed" } : current
+            current ? { ...current, status: event.event_type === "run_completed" ? "completed" : "failed",
+              error_message: event.event_type === "run_failed" ? String(event.payload.error ?? "生成失败，请稍后重试。") : null } : current
           );
         }
       };
@@ -520,6 +528,10 @@ export default function WorkspaceScreen() {
               value={categories}
               onChange={(event) => setCategories(event.target.value)}
             />
+            <input aria-label="阅读背景" placeholder="你的背景（可选）：例如熟悉机器学习，初次接触强化学习"
+              value={readerBackground} onChange={(event) => setReaderBackground(event.target.value)} />
+            <input aria-label="阅读目标" placeholder="阅读目标（可选）：例如理解核心想法，或准备复现方法"
+              value={readingGoal} onChange={(event) => setReadingGoal(event.target.value)} />
             <button type="submit" disabled={loading}>Create</button>
           </form>
           <section className="panel">
@@ -638,7 +650,7 @@ export default function WorkspaceScreen() {
           <>
             <header className="workspace-header">
               <div>
-                <p className="eyebrow">Current Session Runtime</p>
+                <p className="eyebrow">论文阅读工作台</p>
                 <h2>{selectedSession.session.session_name}</h2>
                 <p className="subtle">{selectedSession.session.categories.join(", ") || "Uncategorized"}</p>
               </div>
@@ -652,7 +664,8 @@ export default function WorkspaceScreen() {
               </div>
             </header>
 
-            <section className="panel run-panel">
+            <details className="panel run-panel">
+              <summary>运行详情（需要时展开）</summary>
               <div className="run-panel-header">
                 <div>
                   <p className="eyebrow">Active Runtime</p>
@@ -672,7 +685,7 @@ export default function WorkspaceScreen() {
               {isRunStreaming && (
                 <div className="streaming-indicator">
                   <span className="streaming-dot" />
-                  Streaming response… see “Current Session Run” below.
+                  Streaming response… see “读懂这篇论文” below.
                 </div>
               )}
               {visibleRunEvents.length === 0 ? (
@@ -693,22 +706,25 @@ export default function WorkspaceScreen() {
                   })}
                 </div>
               )}
-            </section>
+            </details>
 
             <section className="workspace-main-grid">
               <div className="panel runtime-column">
                 <div className="analysis-actions">
                   <input
-                    placeholder="Optional focus question"
+                    placeholder="你最想弄懂什么？（可选）"
                     value={focusQuestion}
                     onChange={(event) => setFocusQuestion(event.target.value)}
                   />
                   <button onClick={() => void onAnalyze()} disabled={loading || selectedSession.artifacts.papers.length === 0}>
-                    Analyze Session
+                    生成阅读导引
                   </button>
                 </div>
-                <h3>Current Session Run</h3>
-                {activeRun?.mode === "analyze" && streamedText ? (
+                <h3>读懂这篇论文</h3>
+                {activeRun?.status === "failed" && (
+                  <p role="alert">{activeRun.error_message || "生成失败，请检查模型配置后重试。"}</p>
+                )}
+                {activeRun?.mode === "analyze" && streamedText && isRunStreaming ? (
                   <article className="analysis-section">
                     <div className="analysis-section-head">
                       <h4>Streaming Analysis Draft</h4>
@@ -730,9 +746,24 @@ export default function WorkspaceScreen() {
                   <p className="subtle">Upload papers and run analysis to populate this workspace.</p>
                 )}
                 <div className="divider" />
+                <p className="subtle">哪里还没懂？选择一个方向，或直接写下你的困惑。</p>
+                <div className="reading-shortcuts">
+                  {[
+                    ["通俗概括", "请用通俗语言解释论文的核心想法，先讲问题、直觉和价值，不展开实现细节。"],
+                    ["拆解方法", "请按输入、关键步骤、输出拆解论文方法，解释每一步为什么需要。"],
+                    ["举个例子", "请用一个具体的小例子解释刚才讨论的方法，从输入一步步走到输出，并说明类比的边界。"],
+                    ["解释公式", "请解释论文方法中的关键公式：它解决什么问题、每个符号是什么意思，以及如何理解它。若有多个公式，先讲最核心的一个。"],
+                    ["看懂实验", "请解释最重要的实验：比较了什么、指标意味着什么，以及结果如何支持核心想法。"],
+                    ["检查理解", "请围绕论文核心思想给我三个自测问题，先不要给答案，等我回答后再帮我纠正。"],
+                  ].map(([label, prompt]) => (
+                    <button type="button" className="secondary-button" key={label} disabled={loading}
+                      onClick={() => { setQuestion(prompt); questionInputRef.current?.focus(); }}>{label}</button>
+                  ))}
+                </div>
                 <form onSubmit={onAskQuestion} className="qa-form">
                   <textarea
-                    placeholder="Ask a follow-up question"
+                    ref={questionInputRef}
+                    placeholder="例如：为什么要加这一步？我不理解这个公式的直觉。"
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
                   />
@@ -750,10 +781,10 @@ export default function WorkspaceScreen() {
                   </article>
                 )}
                 {latestVerification && (
-                  <div className="verification-banner">
+                  <details className="verification-banner"><summary>查看原文检查信息</summary>
                     <strong>Latest verification</strong>
                     <div>{latestVerification.status}: {latestVerification.rationale}</div>
-                  </div>
+                  </details>
                 )}
                 <div className="qa-list">
                   {qaRecords.map((record) => (

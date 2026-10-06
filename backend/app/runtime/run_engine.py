@@ -39,6 +39,7 @@ from backend.app.services.reporting.archive_report import ArchiveReportBuilder
 from backend.app.services.retrieval.local_evidence import LocalEvidenceRetriever
 from backend.app.services.verification.verifier import AnswerVerifier
 from backend.app.storage.session_store import SessionStore
+from backend.app.services.reading import GUIDE_SECTIONS, TUTOR_SYSTEM, paper_context
 
 
 logger = get_app_logger("run_engine")
@@ -233,6 +234,7 @@ class RunEngine:
             "localized_refs": [],
             "external_used": False,
             "memory_updated": False,
+            "completed_tools": [],
         }
 
         sequence_number = self._emit(run, sequence_number, "verification_required", {"risk_level": risk_level})
@@ -336,6 +338,7 @@ class RunEngine:
                 sequence_number = self._emit(run, sequence_number, "memory_updated", {"layer": "working_memory"})
             if action == "search_external_sources":
                 state["external_used"] = True
+            state["completed_tools"].append(action)
             sequence_number = self._emit(run, sequence_number, "tool_call_finished", {"tool": action})
             if compact_task is not None and not compact_merged:
                 compact_merged, sequence_number = self._maybe_merge_compact_candidate(
@@ -350,7 +353,7 @@ class RunEngine:
         if risk_level == "high" and not any(item.source_type == "paper" for item in combined_evidence):
             raise RuntimeError("Unable to satisfy high-risk evidence gate with uploaded-paper evidence")
 
-        answer_text = self._draft_answer(question, combined_evidence, localized_refs)
+        answer_text = self._draft_answer(question, combined_evidence, localized_refs, parsed_docs=parsed_docs, qa_records=qa_records, session=session)
         if risk_level == "high" and self.task_engine is not None:
             verification_snapshot = self._build_working_snapshot(
                 session,
@@ -592,6 +595,14 @@ class RunEngine:
             "update_session_memory",
             "finish",
         ]
+        completed = state.get("completed_tools", [])
+        available_tools = [tool for tool in available_tools if tool not in completed]
+        # Reading local text is mandatory useful work, not a model decision.
+        if parsed_docs and "search_local_evidence" not in completed:
+            return "search_local_evidence"
+        observations = "\n".join(
+            f"{item.label}: {item.excerpt[:600]}" for item in self._combined_evidence(state)[:4]
+        )
         if self.llm_client.is_configured:
             prompt = (
                 f"Question: {question}\n"
@@ -603,7 +614,9 @@ class RunEngine:
                 f"analysis={len(state['analysis_evidence'])}, reference={len(state['reference_evidence'])}, "
                 f"external_used={state['external_used']}, memory_updated={state['memory_updated']}\n"
                 f"Available tools: {', '.join(available_tools)}\n"
+                f"Already executed (do not repeat): {completed}\nRead passages:\n{observations}\n"
                 "Choose the single best next action. High-risk questions must not finish without uploaded-paper evidence. "
+                "The answer writer also receives paper sections and recent dialogue. Finish when local passages suffice; do not search externally for an explanation of the uploaded paper. "
                 "Return JSON like {\"action\": \"search_local_evidence\"}."
             )
             try:
@@ -618,15 +631,15 @@ class RunEngine:
             except Exception:
                 logger.info("Falling back to heuristic tool selection", exc_info=True)
 
-        if not state["local_evidence"]:
+        if not state["local_evidence"] and "search_local_evidence" not in completed:
             return "search_local_evidence"
-        if risk_level == "high" and not state["paper_evidence"]:
+        if risk_level == "high" and not state["paper_evidence"] and "read_paper_segments" not in completed:
             return "read_paper_segments"
-        if analyses and not state["analysis_evidence"]:
+        if analyses and not state["analysis_evidence"] and "read_analysis_notes" not in completed:
             return "read_analysis_notes"
-        if references and not state["reference_evidence"]:
+        if references and not state["reference_evidence"] and "read_reference_asset" not in completed:
             return "read_reference_asset"
-        if len(self._combined_evidence(state)) < 2 and not state["external_used"]:
+        if not parsed_docs and len(self._combined_evidence(state)) < 2 and not state["external_used"]:
             return "search_external_sources"
         if not state["memory_updated"]:
             return "update_session_memory"
@@ -742,51 +755,54 @@ class RunEngine:
     def _emit_text(self, run: RunSummary, sequence_number: int, text: str) -> int:
         if not text:
             return sequence_number
-        if self.llm_client.is_configured:
-            prompt = f"Rewrite the following answer faithfully. Keep meaning and evidence intact.\n\n{text}"
-            try:
-                content = ""
-                for event in self.llm_client.stream_chat(
-                    [{"role": "user", "content": prompt}],
-                    system="You are streaming a polished final answer for a paper-reading assistant.",
-                    max_tokens=1400,
-                ):
-                    if event["type"] == "text_delta":
-                        delta = str(event["delta"])
-                        content += delta
-                        sequence_number = self._emit(run, sequence_number, "assistant_delta", {"delta": delta})
-                if content:
-                    return sequence_number
-            except Exception:
-                logger.info("Falling back to local text chunking", exc_info=True)
+        # Emit the actual saved answer. A second model rewrite both delays the
+        # reader and makes the displayed explanation differ from conversation memory.
         for chunk in self._chunk_text(text):
             sequence_number = self._emit(run, sequence_number, "assistant_delta", {"delta": chunk})
         return sequence_number
 
     def _chunk_text(self, text: str, chunk_size: int = 160) -> list[str]:
-        chunks: list[str] = []
-        remaining = text.strip()
-        while remaining:
-            if len(remaining) <= chunk_size:
-                chunks.append(remaining)
-                break
-            split_at = remaining.rfind(" ", 0, chunk_size)
-            if split_at <= 0:
-                split_at = chunk_size
-            chunks.append(remaining[:split_at])
-            remaining = remaining[split_at:].lstrip()
-        return chunks
+        return [text[start:start + chunk_size] for start in range(0, len(text), chunk_size)]
+
+    def _reading_guide(self, session: SessionSummary, doc: ParsedDocument, focus: str | None) -> list[AnalysisSection]:
+        if self.llm_client.is_configured:
+            instructions = "\n".join(f"字段 {key}：{instruction}" for key, title, instruction in GUIDE_SECTIONS)
+            schema = json.dumps({key: "Markdown 字符串" for key, _, _ in GUIDE_SECTIONS}, ensure_ascii=False)
+            prompt = (
+                f"为这篇论文写一份连贯、不重复的阅读导引，中文正文总计约1200—1800字。核心想法只解释一次；方法最重要。\n"
+                f"读者背景：{session.background or '未指定，解释必要前置知识'}\n"
+                f"阅读目标：{session.user_goal or '快速理解核心思想'}\n关注问题：{focus or '无'}\n"
+                f"只返回如下键名的 JSON 对象，不要在键名中添加中文标题，不要外层代码围栏：\n{schema}\n{instructions}\n\n"
+                f"论文内容（可能截取）：\n{paper_context([doc])}"
+            )
+            try:
+                raw = self.llm_client.generate(prompt, system=TUTOR_SYSTEM, max_tokens=4500)
+                cleaned = raw.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+                payload = json.loads(cleaned)
+                if not isinstance(payload, dict):
+                    raise ValueError("Expected a reading guide object")
+                sections = []
+                for key, title, _ in GUIDE_SECTIONS:
+                    value = next((value for name, value in payload.items()
+                        if (name == key or name.startswith(key + "（") or name.startswith(key + " ("))
+                        and isinstance(value, str) and value.strip()), None)
+                    if value:
+                        sections.append(AnalysisSection(key=key, title=title, content=value))
+                if not sections:
+                    raise ValueError("No usable guide sections returned")
+                return sections
+            except Exception:
+                logger.warning("Reading guide generation failed", exc_info=True)
+                raise RuntimeError("未能生成阅读导引，请检查模型服务、模型名称或稍后重试。") from None
+        return [AnalysisSection(
+            key=key, title=title,
+            content="当前未能生成讲解，下面是原文摘录，不是自动解读。\n\n" + self._pick_section_context(doc, key),
+        ) for key, title, _ in GUIDE_SECTIONS]
 
     def _analyze_paper(self, session: SessionSummary, doc: ParsedDocument, focus_question: str | None) -> AnalysisArtifact:
-        sections = [
-            AnalysisSection(key="core_contribution", title="Core Contribution", content=self._section_text(doc, "core_contribution", focus_question)),
-            AnalysisSection(key="problem_definition", title="Problem Definition", content=self._section_text(doc, "problem_definition", focus_question)),
-            AnalysisSection(key="method_details", title="Method Details", content=self._section_text(doc, "method_details", focus_question)),
-            AnalysisSection(key="experiments", title="Experiments and Results", content=self._section_text(doc, "experiments", focus_question)),
-            AnalysisSection(key="limitations", title="Limitations", content=self._section_text(doc, "limitations", focus_question)),
-            AnalysisSection(key="related_work", title="Related Work Context", content=self._section_text(doc, "related_work", focus_question)),
-            AnalysisSection(key="follow_up", title="Good Follow-up Questions", content=self._section_text(doc, "follow_up", focus_question)),
-        ]
+        sections = self._reading_guide(session, doc, focus_question)
         analysis_id = uuid4().hex[:12]
         session_dir = self.store.session_dir(session.session_id)
         markdown_path = session_dir / "analysis" / f"{analysis_id}.md"
@@ -833,6 +849,25 @@ class RunEngine:
                 content="Start with the paper that defines the clearest problem framing, then compare method sections, and finally inspect experiments and limitations side by side.",
             ),
         ]
+        if self.llm_client.is_configured:
+            try:
+                guides = "\n\n".join(
+                    f"论文：{analysis.title}\n" + "\n".join(f"{section.title}: {section.content[:2200]}" for section in analysis.sections[:4])
+                    for analysis in analyses
+                )[:24000]
+                comparison = self.llm_client.generate(
+                    f"根据各篇导读，帮助读者建立论文之间的联系。解释共同问题、方法的关键区别、适用场景，最后给出具体阅读顺序及理由。不要只拼接摘要。\n"
+                    f"读者背景：{session.background or '未指定'}\n目标：{focus_question or session.user_goal or '理解论文'}\n{guides}",
+                    system=TUTOR_SYSTEM, max_tokens=2600,
+                )
+                synthesis_sections = [AnalysisSection(key="overview", title="把几篇论文串起来理解", content=comparison)]
+            except Exception:
+                logger.warning("Cross-paper explanation unavailable; preserving individual guides", exc_info=True)
+        # Keep each guide accessible in the same reading view, including offline mode.
+        synthesis_sections.extend(
+            AnalysisSection(key=f"{analysis.analysis_id}_{section.key}", title=f"{titles[index]} · {section.title}", content=section.content)
+            for index, analysis in enumerate(analyses) for section in analysis.sections
+        )
         analysis_id = uuid4().hex[:12]
         session_dir = self.store.session_dir(session.session_id)
         markdown_path = session_dir / "analysis" / f"{analysis_id}.md"
@@ -846,27 +881,6 @@ class RunEngine:
             markdown_path=str(markdown_path),
             created_at=datetime.now(UTC),
         )
-
-    def _section_text(self, doc: ParsedDocument, section_key: str, focus_question: str | None) -> str:
-        local_context = self._pick_section_context(doc, section_key)
-        if self.llm_client.is_configured:
-            prompt = (
-                f"Paper title: {doc.title}\n\n"
-                f"Abstract:\n{doc.abstract}\n\n"
-                f"Relevant extracted content:\n{local_context}\n\n"
-                f"Write the '{section_key}' section for a PhD-level paper reading assistant."
-            )
-            if focus_question:
-                prompt += f"\n\nFocus question from user: {focus_question}"
-            try:
-                return self.llm_client.generate(
-                    prompt,
-                    system="You are a rigorous research reading assistant. Ground claims in the supplied material and avoid speculation.",
-                    max_tokens=1200,
-                )
-            except Exception:
-                pass
-        return self._heuristic_section(doc, section_key, local_context, focus_question)
 
     def _pick_section_context(self, doc: ParsedDocument, section_key: str) -> str:
         mapping = {
@@ -910,40 +924,37 @@ class RunEngine:
         deduped = list(dict.fromkeys(part.strip() for part in context_parts if part.strip()))
         return "\n\n".join(deduped[:5])
 
-    def _heuristic_section(self, doc: ParsedDocument, section_key: str, local_context: str, focus_question: str | None) -> str:
-        intro = f"This section is drafted from the locally parsed source material for '{doc.title}'."
-        focus_line = f" The current user focus is: {focus_question}." if focus_question else ""
-        section_templates = {
-            "core_contribution": "The paper appears to make its main contribution by defining a concrete research objective and proposing a corresponding technical approach.",
-            "problem_definition": "The paper frames a specific problem setting and motivates why the current alternatives are insufficient.",
-            "method_details": "The method section should be read carefully for model structure, assumptions, optimization details, and any implementation-sensitive choices.",
-            "experiments": "The experimental section should be interpreted by checking datasets, baselines, evaluation metrics, and the extent to which results justify the paper's claims.",
-            "limitations": "The limitations are partly explicit and partly implicit; pay attention to missing ablations, narrow benchmarks, and assumptions that may not generalize.",
-            "related_work": "The paper should be located among nearby approaches rather than read in isolation.",
-            "follow_up": "Good follow-up questions usually probe assumptions, missing experimental details, reproducibility, and connections to related papers.",
-        }
-        return f"{intro}{focus_line}\n\n{section_templates[section_key]}\n\nEvidence excerpt:\n{local_context[:1800]}"
-
-    def _draft_answer(self, question: str, evidence: list[EvidenceRef], references: list[ReferenceAsset]) -> str:
-        evidence_block = "\n\n".join(f"- {item.label}: {item.excerpt[:300]}" for item in evidence[:4])
+    def _draft_answer(self, question: str, evidence: list[EvidenceRef], references: list[ReferenceAsset], *,
+                      parsed_docs: list[ParsedDocument] | None = None,
+                      qa_records: list[QARecord] | None = None,
+                      session: SessionSummary | None = None) -> str:
+        evidence_block = "\n\n".join(f"- {item.label}: {item.excerpt[:2400]}" for item in evidence[:8])
         ref_block = "\n".join(f"- {item.title}: {item.summary[:200]}" for item in references)
+        history = "\n\n".join(f"用户：{qa.question_text[:1000]}\n讲解：{qa.answer_text[:3500]}" for qa in (qa_records or [])[-3:])
         if self.llm_client.is_configured:
             prompt = (
+                f"读者背景：{session.background if session else ''}\n阅读目标：{session.user_goal if session else ''}\n"
+                f"最近对话（用来理解‘这一步’等指代）：\n{history}\n\n"
+                f"论文整体上下文：\n{paper_context(parsed_docs or [], budget=24000, query=question)}\n\n"
                 f"Question:\n{question}\n\n"
                 f"Local evidence:\n{evidence_block}\n\n"
                 f"New external references:\n{ref_block or 'None'}\n\n"
-                "Answer the question at a PhD reading depth. Use the local evidence first and mention when new references informed the answer."
+                "只解决当前问题，通常400—800字，最多三个小标题；用户明确要求详解时再扩展。不要主动增加复现流程、相关工作或结尾再总结。"
+                "如果用户没听懂，沿用上一轮例子并补上缺失的一步，不要重讲整篇论文。解释训练方法时明确数据形态和实际优化目标，不能只说‘理解’或‘内化’。"
+                "如果问复现或具体生成步骤，优先按相关附录的实际操作顺序解释，覆盖其中列明的各步骤，不能用正文的简略概述替代附录流程。"
+                "自测请求先只出题不公布答案。教学类比用一句话标明，优先使用论文自身的例子。"
             )
             try:
                 return self.llm_client.generate(
                     prompt,
-                    system="You are a rigorous research reading assistant. Prefer local evidence, then explicitly integrate external references.",
-                    max_tokens=1200,
+                    system=TUTOR_SYSTEM,
+                    max_tokens=2600,
                 )
             except Exception:
-                pass
+                logger.warning("Reading answer generation failed", exc_info=True)
+                raise RuntimeError("未能生成讲解，请检查模型服务、模型名称或稍后重试。") from None
         lines = [
-            "This answer is grounded in the session-local evidence first.",
+            "当前未能生成讲解，以下为相关原文摘录。请检查模型配置或稍后重试。",
             "",
             f"Question: {question}",
             "",

@@ -854,3 +854,10 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.reading-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.run-panel > summary { cursor: pointer; }
+.markdown-table { overflow-x: auto; }
+.markdown-body table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+.markdown-body th, .markdown-body td { border: 1px solid #ccd4df; padding: 8px; text-align: left; }
+.markdown-body pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f1f5f9; border-radius: 8px; }

@@ -76,6 +76,38 @@ export default function Markdown({
       continue;
     }
 
+    const fence = /^(`{3,}|~{3,})(.*)$/.exec(trimmed);
+    if (fence) {
+      flushParagraph();
+      const code: string[] = [];
+      index += 1;
+      const closing = new RegExp(`^${fence[1][0]}{${fence[1].length},}\\s*$`);
+      while (index < lines.length && !closing.test(lines[index].trim())) {
+        code.push(lines[index++]);
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(<pre key={`code${key++}`}><code>{code.join("\n")}</code></pre>);
+      continue;
+    }
+
+    const cells = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+    if (trimmed.includes("|") && index + 1 < lines.length &&
+        cells(lines[index + 1]).every((cell) => /^:?-{3,}:?$/.test(cell))) {
+      flushParagraph();
+      const headers = cells(trimmed);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim().includes("|")) {
+        rows.push(cells(lines[index++]));
+      }
+      const tableKey = key++;
+      blocks.push(<div className="markdown-table" key={`table${tableKey}`}><table>
+        <thead><tr>{headers.map((cell, i) => <th key={i}>{renderInline(cell, `th${tableKey}-${i}`)}</th>)}</tr></thead>
+        <tbody>{rows.map((row, r) => <tr key={r}>{headers.map((_, c) => <td key={c}>{renderInline(row[c] ?? "", `td${tableKey}-${r}-${c}`)}</td>)}</tr>)}</tbody>
+      </table></div>);
+      continue;
+    }
+
     const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
     if (heading) {
       flushParagraph();

@@ -16,7 +16,7 @@ logger = get_app_logger("llm")
 
 _OPENAI_BASE_URL = "https://api.openai.com/v1"
 _CLAUDE_BASE_URL = "https://api.anthropic.com/v1"
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
+_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504, 529}
 _NON_RETRYABLE_ERROR_MARKERS = (
     "unknown provider for model",
     "model_not_found",

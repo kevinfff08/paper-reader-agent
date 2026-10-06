@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Iterable
 
 from backend.app.core.models.domain import AnalysisArtifact, EvidenceRef, ParsedChunk, ParsedDocument, QARecord, ReferenceAsset
@@ -34,10 +35,27 @@ STOPWORDS = {
 
 
 def _tokenize(text: str) -> list[str]:
-    cleaned = text.lower()
+    # PDF extraction can join headings such as "MSMData Generation".
+    cleaned = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
+    cleaned = re.sub(r"([a-z])([A-Z])", r"\1 \2", cleaned).lower()
+    # Bridge common Chinese reading questions to English paper terminology.
+    concepts = {
+        "方法": "method approach", "步骤": "method algorithm", "原理": "method approach",
+        "公式": "equation formulation", "实验": "experiment results", "结果": "results",
+        "消融": "ablation", "数据集": "dataset", "指标": "metric evaluation",
+        "局限": "limitation discussion", "背景": "background introduction",
+        "贡献": "contribution introduction", "核心": "abstract introduction",
+        "图": "figure", "表格": "table", "例子": "example method",
+        "生成": "generation", "合成": "synthetic generation", "文档": "document",
+        "复现": "method training hyperparameters", "训练": "training", "目标": "objective",
+    }
+    cleaned += " " + " ".join(value for key, value in concepts.items() if key in text)
     for symbol in ",.;:!?()[]{}<>/\\|\"'`~@#$%^&*_+=-":
         cleaned = cleaned.replace(symbol, " ")
-    return [token for token in cleaned.replace("\n", " ").split() if len(token) > 2 and token not in STOPWORDS]
+    tokens = [token for token in cleaned.replace("\n", " ").split() if len(token) > 2 and token not in STOPWORDS]
+    for phrase in re.findall(r"[\u4e00-\u9fff]+", text):
+        tokens.extend(phrase[i:i + 2] for i in range(len(phrase) - 1))
+    return tokens
 
 
 class LocalEvidenceRetriever:
@@ -86,7 +104,7 @@ class LocalEvidenceRetriever:
                             source_type="paper",
                             asset_id=doc.paper_id,
                             label=f"{doc.title} - {chunk.heading}",
-                            excerpt=chunk.content[:500],
+                            excerpt=chunk.content[:2400],
                             locator=locator,
                             page_label=chunk.page_label,
                             score=score,

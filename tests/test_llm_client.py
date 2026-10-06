@@ -81,3 +81,26 @@ def test_proxy_unknown_model_error_is_not_retried(monkeypatch) -> None:
         pass
 
     assert calls == 1
+
+
+def test_proxy_request_timeout_can_recover(monkeypatch) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(408, json={"error": {"message": "Request Timeout"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Recovered explanation"}}]})
+
+    original_client = httpx.Client
+
+    def patched_client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", patched_client)
+    monkeypatch.setattr("backend.app.llm.client.time.sleep", lambda _: None)
+    client = LLMClient(mode="setup-token", base_url="http://localhost:8317", model="gpt-5.5")
+    assert client.generate("Explain") == "Recovered explanation"
+    assert calls == 2
