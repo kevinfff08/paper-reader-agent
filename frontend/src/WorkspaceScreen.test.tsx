@@ -176,9 +176,29 @@ describe("WorkspaceScreen", () => {
 
     expect((await screen.findAllByText("Test Session")).length).toBeGreaterThan(0);
     expect(screen.getByText("生成阅读导引")).toBeInTheDocument();
-    expect(screen.getByText("Current Session File Manager")).toBeInTheDocument();
+    expect(screen.getByText("Current Session File Manager")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "文件", exact: true }));
+    expect(screen.getByText("Current Session File Manager")).toBeVisible();
     expect(mockedApi.listSessions).toHaveBeenCalled();
     expect(mockedApi.getSession).toHaveBeenCalledWith("session-1");
+  });
+
+  it("preserves drafts and search filters when switching and closing panels", async () => {
+    render(<WorkspaceScreen />);
+    await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByRole("button", { name: "讨论", exact: true }));
+    const draft = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
+    fireEvent.change(draft, { target: { value: "Explain this assumption" } });
+    fireEvent.click(screen.getByRole("button", { name: "找论文", exact: true }));
+    const search = screen.getByPlaceholderText("Search papers, venues, or topics");
+    fireEvent.change(search, { target: { value: "preference learning" } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭辅助面板" }));
+    expect(search).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "讨论", exact: true }));
+    expect(draft).toHaveValue("Explain this assumption");
+    fireEvent.click(screen.getByRole("button", { name: "找论文", exact: true }));
+    expect(search).toHaveValue("preference learning");
+    expect(mockedApi.createRun).not.toHaveBeenCalled();
   });
 
   it("streams run output and shows runtime events", async () => {
@@ -228,6 +248,7 @@ describe("WorkspaceScreen", () => {
       });
     });
 
+    fireEvent.click(screen.getByRole("button", { name: /任务/ }));
     expect(await screen.findByText("Active Runtime")).toBeInTheDocument();
     expect(await screen.findByText("Complete method explanation")).toBeInTheDocument();
     expect(screen.queryByText("Streaming output")).not.toBeInTheDocument();
@@ -242,6 +263,7 @@ describe("WorkspaceScreen", () => {
   it("puts a teaching shortcut into the editable question without starting a run", async () => {
     render(<WorkspaceScreen />);
     await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByRole("button", { name: "讨论", exact: true }));
     fireEvent.click(screen.getByRole("button", { name: "举个例子" }));
     const input = screen.getByPlaceholderText("例如：为什么要加这一步？我不理解这个公式的直觉。");
     expect((input as HTMLTextAreaElement).value).toContain("论文中的一个例子");
@@ -267,6 +289,7 @@ describe("WorkspaceScreen", () => {
     render(<WorkspaceScreen />);
 
     await screen.findAllByText("Test Session");
+    fireEvent.click(screen.getByRole("button", { name: "找论文", exact: true }));
     fireEvent.change(screen.getByPlaceholderText("Search papers, venues, or topics"), {
       target: { value: "transformer" },
     });
@@ -309,7 +332,8 @@ describe("WorkspaceScreen", () => {
     render(<WorkspaceScreen />);
 
     await screen.findAllByText("Test Session");
-    expect(await screen.findByText("Task Drawer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /任务/ }));
+    expect(screen.getByRole("region", { name: "运行与任务" })).toBeVisible();
 
     const source = MockEventSource.instances[0];
     await act(async () => {

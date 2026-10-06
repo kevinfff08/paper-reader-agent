@@ -207,7 +207,8 @@ export default function WorkspaceScreen() {
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [currentSearch, setCurrentSearch] = useState<LiteratureSearchRecord | null>(null);
   const [localizingResultId, setLocalizingResultId] = useState<string | null>(null);
-  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<"discussion" | "discovery" | "files" | "tasks" | null>(null);
+  const [panelPinned, setPanelPinned] = useState(true);
   const [taskEvents, setTaskEvents] = useState<Record<string, TaskEvent[]>>({});
   const questionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const runSourceRef = useRef<EventSource | null>(null);
@@ -225,9 +226,7 @@ export default function WorkspaceScreen() {
     if (detail.artifacts.literature_searches.length > 0 && !currentSearch) {
       setCurrentSearch(detail.artifacts.literature_searches[detail.artifacts.literature_searches.length - 1] ?? null);
     }
-    if (detail.artifacts.tasks.some((task) => !isTaskTerminal(task))) {
-      setTaskPanelOpen(true);
-    }
+
   }
 
   useEffect(() => {
@@ -293,7 +292,7 @@ export default function WorkspaceScreen() {
           }
           return updateArtifactsTask(current, nextTask);
         });
-        setTaskPanelOpen(true);
+
         if (["task_completed", "task_failed", "task_cancelled"].includes(event.event_type)) {
           source.close();
           taskSourcesRef.current.delete(task.task_id);
@@ -557,159 +556,41 @@ export default function WorkspaceScreen() {
     );
   }
 
+  const tools = [["discussion", "讨论"], ["discovery", "找论文"], ["files", "文件"], ["tasks", "任务"]] as const;
   return (
-    <div className={`app-shell ${taskPanelOpen ? "task-panel-open" : ""}`}>
-      <aside className="sidebar">
-        <div className="brand">
-          <p className="eyebrow">PaperReader</p>
-          <h1>Session Files</h1>
-        </div>
-        <button className="secondary-button" onClick={() => setView("sessions")}>All Sessions</button>
-        {!selectedSession ? (
-          <div className="panel empty-state">
-            <h2>No session selected</h2>
-            <p>Create or open a session from the session manager.</p>
-          </div>
-        ) : (
-          <>
-            <section className="panel">
-              <h2>{selectedSession.session.session_name}</h2>
-              <p className="subtle">{selectedSession.session.categories.join(", ") || "Uncategorized"}</p>
-              <input
-                type="file"
-                multiple
-                onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
-              />
-              <button onClick={() => void onUpload()} disabled={loading || uploadFiles.length === 0}>
-                Upload Papers
-              </button>
-            </section>
-            <section className="panel file-manager">
-              <h3>Current Session File Manager</h3>
-              {orderedFileCategories.length === 0 && (
-                <p className="subtle">No files yet. Upload papers to get started.</p>
-              )}
-              {orderedFileCategories.map((category) => {
-                const files = filesByCategory[category];
-                const meta = CATEGORY_META[category] ?? { label: category, icon: "📁", hint: "" };
-                return (
-                  <div key={category} className="file-group">
-                    <div className="file-group-head">
-                      <span className="file-group-icon">{meta.icon}</span>
-                      <div>
-                        <h4>
-                          {meta.label}
-                          <span className="file-count">{files.length}</span>
-                        </h4>
-                        {meta.hint && <p className="file-group-hint">{meta.hint}</p>}
-                      </div>
-                    </div>
-                    <ul className="file-list">
-                      {files.map((file) => (
-                        <li key={file.file_id} className="file-item" title={file.path}>
-                          <span className="file-kind">{fileKindBadge(file.label)}</span>
-                          <div className="file-item-body">
-                            <strong>{resolveFileTitle(file, resolverMaps)}</strong>
-                            <code className="file-name">{file.label}</code>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })}
-            </section>
-            <section className="panel">
-              <h3>Localized References</h3>
-              <ul className="plain-list compact-list">
-                {selectedSession.artifacts.references.map((reference) => {
-                  const primaryAccessUrl = getPrimaryAccessUrl(reference);
-                  return (
-                    <li key={reference.reference_id}>
-                      <strong>{reference.title}</strong>
-                      <div className="subtle">{reference.source_kind}</div>
-                      {primaryAccessUrl && (
-                        <a href={primaryAccessUrl} target="_blank" rel="noreferrer">Open</a>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          </>
-        )}
+    <div className={`reader-shell ${activePanel ? "panel-open" : ""} ${panelPinned ? "panel-pinned" : ""}`}
+      onKeyDown={(event) => { if (event.key === "Escape") setActivePanel(null); }}>
+      <aside className="reader-nav" aria-label="会话导航">
+        <div className="reader-brand">PaperReader<span>研究，从读懂开始</span></div>
+        <button className="secondary-button" onClick={() => setView("sessions")}>所有会话</button>
+        {selectedSession ? <>
+          <div className="nav-section-label">当前会话</div>
+          <strong className="nav-session-title">{selectedSession.session.session_name}</strong>
+          <p className="subtle">{selectedSession.session.categories.join(" / ") || "未分类"}</p>
+          <div className="nav-section-label">论文 · {selectedSession.artifacts.papers.length}</div>
+          <ul className="paper-nav-list">{selectedSession.artifacts.papers.map((paper) =>
+            <li key={paper.paper_id}>{cleanPaperName(paper.title || paper.filename)}</li>)}</ul>
+          <details className="upload-control"><summary>添加论文</summary>
+            <input aria-label="选择论文文件" type="file" multiple onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))} />
+            <button onClick={() => void onUpload()} disabled={loading || uploadFiles.length === 0}>上传论文</button>
+          </details>
+          <details className="reader-profile"><summary>阅读背景与目标</summary>
+            <p>{selectedSession.session.background || "尚未填写阅读背景"}</p>
+            <p>{selectedSession.session.user_goal || "尚未填写阅读目标"}</p>
+          </details>
+        </> : <p className="subtle">创建会话，开始阅读。</p>}
       </aside>
-
-      <main className="workspace">
-        {!selectedSession ? (
-          <div className="empty-state">
-            <h2>No session selected</h2>
-            <p>Open the session manager to begin.</p>
-          </div>
-        ) : (
-          <>
-            <header className="workspace-header">
-              <div>
-                <p className="eyebrow">论文阅读工作台</p>
-                <h2>{selectedSession.session.session_name}</h2>
-                <p className="subtle">{selectedSession.session.categories.join(", ") || "Uncategorized"}</p>
-              </div>
-              <div className="workspace-actions">
-                <button className="secondary-button" onClick={() => setTaskPanelOpen((current) => !current)}>
-                  {taskPanelOpen ? "Hide Tasks" : "Show Tasks"}
-                </button>
-                <button className="archive-button" onClick={() => void onArchive()} disabled={loading}>
-                  Generate Archive
-                </button>
-              </div>
-            </header>
-
-            <details className="panel run-panel">
-              <summary>运行详情（需要时展开）</summary>
-              <div className="run-panel-header">
-                <div>
-                  <p className="eyebrow">Active Runtime</p>
-                  <h3>{activeRun?.mode ?? "recent"} run</h3>
-                </div>
-                <div className={`status-chip ${latestRunStatus === "running" ? "status-running" : latestRunStatus === "completed" ? "status-completed" : latestRunStatus === "failed" ? "status-failed" : ""}`}>
-                  {latestRunStatus ?? "idle"}
-                </div>
-              </div>
-              {activeRun?.verification_state && (
-                <div className="meta-block">
-                  <span>Working state version: {activeRun.working_state_version}</span>
-                  <span>Verification state: {activeRun.verification_state}</span>
-                  <span>Background tasks: {activeRun.active_background_task_ids.length}</span>
-                </div>
-              )}
-              {isRunStreaming && (
-                <div className="streaming-indicator">
-                  <span className="streaming-dot" />
-                  Streaming response… see “读懂这篇论文” below.
-                </div>
-              )}
-              {visibleRunEvents.length === 0 ? (
-                <p className="subtle">Run events will appear here.</p>
-              ) : (
-                <div className="event-feed">
-                  {visibleRunEvents.map((event) => {
-                    const meta = describeRunEvent(event);
-                    return (
-                      <div key={event.event_id} className={`event-row tone-${meta.tone}`}>
-                        <span className="event-icon">{meta.icon}</span>
-                        <div className="event-body">
-                          <strong>{meta.title}</strong>
-                          {meta.detail && <span>{meta.detail}</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </details>
-
-            <section className="workspace-main-grid">
-              <div className="panel runtime-column">
+      <main className="reader-workspace">
+        <header className="reader-toolbar">
+          <span className="reader-location">阅读工作台</span>
+          <nav className="utility-tabs" aria-label="阅读工具">{tools.map(([key, label]) =>
+            <button key={key} className="secondary-button" aria-pressed={activePanel === key} aria-controls={`tool-${key}`}
+              onClick={() => setActivePanel(activePanel === key ? null : key)}>{label}{key === "tasks" && visibleTasks.some((task) => !isTaskTerminal(task)) && <span className="activity-dot" aria-label="任务进行中" />}</button>)}</nav>
+          <button className="secondary-button" onClick={() => void onArchive()} disabled={!selectedSession || loading}>归档</button>
+        </header>
+        {selectedSession ? <>
+          <div className="reader-status" role="status">{isRunStreaming ? "正在生成，请稍候…" : latestRunStatus === "failed" ? "生成未完成，请查看错误信息" : ""}</div>
+          <div className="reading-document">
                 <div className="analysis-actions">
                   <input
                     placeholder="你最想弄懂什么？（可选）"
@@ -745,7 +626,20 @@ export default function WorkspaceScreen() {
                 ) : (
                   <p className="subtle">Upload papers and run analysis to populate this workspace.</p>
                 )}
-                <div className="divider" />
+
+          </div>
+          <footer className="reading-footer"><button className="secondary-button" onClick={() => setActivePanel("discussion")}>有疑问？继续讨论 →</button>
+            {selectedSession.artifacts.archive?.markdown_path && <p className="archive-path">归档已生成：<code>{selectedSession.artifacts.archive.markdown_path}</code></p>}
+          </footer>
+        </> : <div className="empty-state"><h2>把论文读成自己的理解</h2><p>创建一个会话，添加想读的论文。</p><button onClick={() => setView("sessions")}>创建会话</button></div>}
+      </main>
+      <aside className="utility-panel" hidden={!activePanel} aria-label="辅助面板">
+        <header className="utility-panel-header"><strong>{tools.find(([key]) => key === activePanel)?.[1]}</strong>
+          <button className="secondary-button" aria-pressed={panelPinned} onClick={() => setPanelPinned(!panelPinned)}>{panelPinned ? "取消固定" : "固定面板"}</button>
+          <button className="secondary-button" onClick={() => setActivePanel(null)} aria-label="关闭辅助面板">关闭</button>
+        </header>
+        {selectedSession && <>
+          <section id="tool-discussion" className="utility-content" hidden={activePanel !== "discussion"} aria-label="论文讨论">
                 <p className="subtle">哪里还没懂？选择一个方向，或直接写下你的困惑。</p>
                 <div className="reading-shortcuts">
                   {[
@@ -801,9 +695,9 @@ export default function WorkspaceScreen() {
                     </article>
                   ))}
                 </div>
-              </div>
 
-              <div className="panel discovery-column">
+          </section>
+          <section id="tool-discovery" className="utility-content" hidden={activePanel !== "discovery"} aria-label="文献搜索">
                 <h3>Find Papers</h3>
                 <form className="discovery-form" onSubmit={onDiscover}>
                   <input
@@ -865,26 +759,108 @@ export default function WorkspaceScreen() {
                     ))}
                   </div>
                 )}
-                {selectedSession.artifacts.archive?.markdown_path && (
-                  <div className="archive-path">
-                    Archive ready: <code>{selectedSession.artifacts.archive.markdown_path}</code>
-                  </div>
-                )}
-              </div>
-            </section>
-          </>
-        )}
-      </main>
 
-      {selectedSession && (
-        <aside className={`task-panel ${taskPanelOpen ? "visible" : ""}`}>
-          <div className="task-panel-header">
-            <div>
-              <p className="eyebrow">Background Tasks</p>
-              <h3>Task Drawer</h3>
-            </div>
-            <button className="secondary-button" onClick={() => setTaskPanelOpen(false)}>Close</button>
-          </div>
+          </section>
+          <section id="tool-files" className="utility-content" hidden={activePanel !== "files"} aria-label="会话文件">
+            <section className="panel file-manager">
+              <h3>Current Session File Manager</h3>
+              {orderedFileCategories.length === 0 && (
+                <p className="subtle">No files yet. Upload papers to get started.</p>
+              )}
+              {orderedFileCategories.map((category) => {
+                const files = filesByCategory[category];
+                const meta = CATEGORY_META[category] ?? { label: category, icon: "📁", hint: "" };
+                return (
+                  <div key={category} className="file-group">
+                    <div className="file-group-head">
+                      <span className="file-group-icon">{meta.icon}</span>
+                      <div>
+                        <h4>
+                          {meta.label}
+                          <span className="file-count">{files.length}</span>
+                        </h4>
+                        {meta.hint && <p className="file-group-hint">{meta.hint}</p>}
+                      </div>
+                    </div>
+                    <ul className="file-list">
+                      {files.map((file) => (
+                        <li key={file.file_id} className="file-item" title={file.path}>
+                          <span className="file-kind">{fileKindBadge(file.label)}</span>
+                          <div className="file-item-body">
+                            <strong>{resolveFileTitle(file, resolverMaps)}</strong>
+                            <code className="file-name">{file.label}</code>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </section>
+            <section className="panel">
+              <h3>Localized References</h3>
+              <ul className="plain-list compact-list">
+                {selectedSession.artifacts.references.map((reference) => {
+                  const primaryAccessUrl = getPrimaryAccessUrl(reference);
+                  return (
+                    <li key={reference.reference_id}>
+                      <strong>{reference.title}</strong>
+                      <div className="subtle">{reference.source_kind}</div>
+                      {primaryAccessUrl && (
+                        <a href={primaryAccessUrl} target="_blank" rel="noreferrer">Open</a>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+
+          </section>
+          <section id="tool-tasks" className="utility-content" hidden={activePanel !== "tasks"} aria-label="运行与任务">
+            <details className="panel run-panel">
+              <summary>运行详情（需要时展开）</summary>
+              <div className="run-panel-header">
+                <div>
+                  <p className="eyebrow">Active Runtime</p>
+                  <h3>{activeRun?.mode ?? "recent"} run</h3>
+                </div>
+                <div className={`status-chip ${latestRunStatus === "running" ? "status-running" : latestRunStatus === "completed" ? "status-completed" : latestRunStatus === "failed" ? "status-failed" : ""}`}>
+                  {latestRunStatus ?? "idle"}
+                </div>
+              </div>
+              {activeRun?.verification_state && (
+                <div className="meta-block">
+                  <span>Working state version: {activeRun.working_state_version}</span>
+                  <span>Verification state: {activeRun.verification_state}</span>
+                  <span>Background tasks: {activeRun.active_background_task_ids.length}</span>
+                </div>
+              )}
+              {isRunStreaming && (
+                <div className="streaming-indicator">
+                  <span className="streaming-dot" />
+                  Streaming response… see “读懂这篇论文” below.
+                </div>
+              )}
+              {visibleRunEvents.length === 0 ? (
+                <p className="subtle">Run events will appear here.</p>
+              ) : (
+                <div className="event-feed">
+                  {visibleRunEvents.map((event) => {
+                    const meta = describeRunEvent(event);
+                    return (
+                      <div key={event.event_id} className={`event-row tone-${meta.tone}`}>
+                        <span className="event-icon">{meta.icon}</span>
+                        <div className="event-body">
+                          <strong>{meta.title}</strong>
+                          {meta.detail && <span>{meta.detail}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </details>
+
           <div className="task-list">
             {visibleTasks.length === 0 ? (
               <p className="subtle">No background tasks yet.</p>
@@ -924,9 +900,10 @@ export default function WorkspaceScreen() {
               ))
             )}
           </div>
-        </aside>
-      )}
+
+          </section>
+        </>}
+      </aside>
     </div>
   );
 }
-
