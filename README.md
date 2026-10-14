@@ -606,3 +606,4 @@ npm run test
 
 启动配置统一从仓库根目录的 .env 读取，显式环境变量优先；测试模式不加载本地 .env。相对会话与解析缓存路径以仓库根目录为基准，避免从其他目录启动时切换数据位置。
 
+前端 API 和 SSE 使用同源相对地址，桌面端自动跟随应用端口；Vite 开发服务器代理 /sessions 和 /healthz，并从仓库 .env 或进程环境读取 PAPERREADER_DESKTOP_HOST/PORT。

@@ -8,7 +8,8 @@ import {
   TaskSummary,
 } from "./types";
 
-const API_BASE = "http://127.0.0.1:8000";
+// Desktop requests follow the page origin; Vite forwards them in development.
+const API_BASE = "";
 
 export async function listSessions(): Promise<SessionSummary[]> {
   const response = await fetch(`${API_BASE}/sessions`);
