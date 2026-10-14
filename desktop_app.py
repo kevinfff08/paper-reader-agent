@@ -21,8 +21,6 @@ import os
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 
 import uvicorn
 import webview
@@ -54,24 +52,29 @@ def _start_backend() -> tuple[_BackgroundServer, threading.Thread]:
     # when we actually start the desktop app.
     from backend.app.main import app
 
-    config = uvicorn.Config(app, host=HOST, port=PORT, log_level="info")
+    config = uvicorn.Config(app, host=HOST, port=PORT, log_level="info", timeout_graceful_shutdown=3)
     server = _BackgroundServer(config)
-    thread = threading.Thread(target=server.run, name="paperreader-backend", daemon=True)
+    def serve() -> None:
+        try:
+            server.run()
+        except SystemExit:
+            # Uvicorn reports bind failures before exiting its worker.
+            return
+
+    thread = threading.Thread(target=serve, name="paperreader-backend", daemon=True)
     thread.start()
     return server, thread
 
 
-def _wait_until_ready(timeout: float = 60.0) -> bool:
-    """Poll ``/healthz`` until the backend responds or the timeout elapses."""
-    health_url = f"http://{HOST}:{PORT}/healthz"
+def _wait_until_ready(server: _BackgroundServer, thread: threading.Thread, timeout: float = 60.0) -> bool:
+    """Wait for this server to bind, never accept a different process's health."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(health_url, timeout=2) as response:
-                if response.status == 200:
-                    return True
-        except (urllib.error.URLError, ConnectionError, OSError):
-            time.sleep(0.25)
+        if not thread.is_alive():
+            return False
+        if server.started:
+            return True
+        time.sleep(0.05)
     return False
 
 
@@ -84,22 +87,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    server, _thread = _start_backend()
-    if not _wait_until_ready():
-        print("[ERROR] Backend did not become ready in time; aborting.", file=sys.stderr)
+    server, thread = _start_backend()
+    try:
+        if not _wait_until_ready(server, thread):
+            print(f"[ERROR] Backend could not start on {HOST}:{PORT}. Check port conflicts and errors above.", file=sys.stderr)
+            return 1
+
+        target_url = DEV_URL if args.dev else f"http://{HOST}:{PORT}"
+        print(f"[OK] PaperReader backend ready. Opening window at {target_url}")
+        webview.create_window(WINDOW_TITLE, target_url, width=1280, height=860)
+        webview.start()
+        return 0
+    finally:
         server.should_exit = True
-        return 1
-
-    target_url = DEV_URL if args.dev else f"http://{HOST}:{PORT}"
-    print(f"[OK] PaperReader backend ready. Opening window at {target_url}")
-
-    webview.create_window(WINDOW_TITLE, target_url, width=1280, height=860)
-    # Blocks until every window is closed.
-    webview.start()
-
-    # Window closed -> shut the backend down and let the process exit cleanly.
-    server.should_exit = True
-    return 0
+        thread.join(timeout=5)
 
 
 if __name__ == "__main__":
