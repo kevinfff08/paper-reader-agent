@@ -79,13 +79,26 @@ REM --- Build frontend (desktop app serves frontend/dist) ---
 REM Always rebuild so the window never serves a stale bundle after frontend edits.
 REM Set PAPERREADER_SKIP_BUILD=1 to skip when you know dist is already current.
 pushd "%ROOT%frontend"
+if errorlevel 1 exit /b 1
 if not exist "node_modules" (
     echo [BUILD] Installing frontend dependencies ...
     call npm install
+    if errorlevel 1 (
+        echo [ERROR] Dependency installation failed. Startup cancelled.
+        popd
+        pause
+        exit /b 1
+    )
 )
 if /I not "%PAPERREADER_SKIP_BUILD%"=="1" (
     echo [BUILD] Building frontend ...
     call npm run build
+    if errorlevel 1 (
+        echo [ERROR] Frontend build failed. Startup cancelled; old output will not be used.
+        popd
+        pause
+        exit /b 1
+    )
 )
 popd
 if not exist "%ROOT%frontend\dist\index.html" (

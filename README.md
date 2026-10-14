@@ -608,3 +608,4 @@ npm run test
 
 前端 API 和 SSE 使用同源相对地址，桌面端自动跟随应用端口；Vite 开发服务器代理 /sessions 和 /healthz，并从仓库 .env 或进程环境读取 PAPERREADER_DESKTOP_HOST/PORT。
 桌面启动只接受本次后端实例完成监听的状态，端口冲突会失败退出；窗口关闭或创建失败时通过 finally 通知后端退出并限时等待。此清理不代表运行中的模型任务支持断点恢复。
+一键启动会立即检查依赖安装和前端构建的退出状态；失败即停止，不因旧 dist/index.html 仍存在而继续启动。
