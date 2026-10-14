@@ -1,4 +1,4 @@
-﻿# PaperReader
+# PaperReader
 
 > 面向论文精读场景的本地优先阅读工作台。它不是一次性摘要器，而是一个围绕 `session` 持久化状态构建的论文阅读运行时。默认以轻量级桌面应用形式运行（原生窗口 + 进程内 FastAPI），也保留浏览器开发模式。
 
@@ -490,7 +490,7 @@ copy .env.example .env
 start.bat
 ```
 
-`start.bat` 会激活 conda 环境、按需启动 CLIProxyAPI、构建前端，最后运行 `desktop_app.py`：进程内拉起 FastAPI（`http://127.0.0.1:8000`），并在原生窗口中加载工作台。关闭窗口即退出整个应用。
+`start.bat` 会激活 conda 环境、构建前端，最后运行 `desktop_app.py`，统一加载配置并检查 CLIProxyAPI：进程内拉起 FastAPI（`http://127.0.0.1:8000`），并在原生窗口中加载工作台。关闭窗口即退出整个应用。
 
 > 说明：`start.bat` 默认**每次启动都会重新构建前端**（`frontend` 很小，构建很快），以避免前端改动后窗口仍加载旧产物。若确认 `dist` 已是最新，可设 `PAPERREADER_SKIP_BUILD=1` 跳过构建。
 >
@@ -609,3 +609,4 @@ npm run test
 前端 API 和 SSE 使用同源相对地址，桌面端自动跟随应用端口；Vite 开发服务器代理 /sessions 和 /healthz，并从仓库 .env 或进程环境读取 PAPERREADER_DESKTOP_HOST/PORT。
 桌面启动只接受本次后端实例完成监听的状态，端口冲突会失败退出；窗口关闭或创建失败时通过 finally 通知后端退出并限时等待。此清理不代表运行中的模型任务支持断点恢复。
 一键启动会立即检查依赖安装和前端构建的退出状态；失败即停止，不因旧 dist/index.html 仍存在而继续启动。
+代理检查由桌面入口统一执行，启动脚本不再重复解析 .env。setup-token 模式先检查配置地址的 /v1/models 并复用已就绪服务；仅为 localhost/127.0.0.1:8317 自动启动 C:\cliproxyapi 下的安装，等待最多 15 秒，失败清理本次新建进程。自定义代理不可用时明确报错，不启动地址不符的本地服务。代理就绪仅代表接口可达，不保证后续模型额度或生成请求成功；成功启动的代理保留供后续实例复用。

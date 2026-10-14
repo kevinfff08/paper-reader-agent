@@ -25,7 +25,8 @@ import time
 import uvicorn
 import webview
 
-from backend.app.core.config import load_environment
+from backend.app.core.config import get_settings, load_environment
+from desktop_proxy import ensure_proxy
 
 load_environment()
 
@@ -86,6 +87,12 @@ def main() -> int:
         help="Point the window at the Vite dev server (run `npm run dev` separately).",
     )
     args = parser.parse_args()
+
+    try:
+        ensure_proxy(get_settings())
+    except (RuntimeError, OSError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
 
     server, thread = _start_backend()
     try:
