@@ -27,6 +27,10 @@ import urllib.request
 import uvicorn
 import webview
 
+from backend.app.core.config import load_environment
+
+load_environment()
+
 HOST: str = os.getenv("PAPERREADER_DESKTOP_HOST", "127.0.0.1")
 PORT: int = int(os.getenv("PAPERREADER_DESKTOP_PORT", "8000"))
 DEV_URL: str = os.getenv("PAPERREADER_DESKTOP_DEV_URL", "http://127.0.0.1:5173")

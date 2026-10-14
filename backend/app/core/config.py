@@ -6,6 +6,16 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def load_environment() -> None:
+    """Load local defaults without overriding explicit process settings or tests."""
+    if not is_test_mode_enabled():
+        load_dotenv(REPO_ROOT / ".env", override=False, encoding="utf-8-sig")
+
 
 _QUOTE_PAIRS = {
     ("'", "'"),
@@ -45,7 +55,8 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _env_path(name: str, default: str) -> Path:
-    return Path(os.getenv(name, default))
+    path = Path(_env_str(name, default) or default)
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def is_test_mode_enabled() -> bool:
@@ -61,7 +72,7 @@ def ensure_safe_session_root(root: Path, *, test_mode: bool, repo_root: Path | N
     """Reject formal session storage when tests are running."""
     if not test_mode:
         return
-    base = repo_root or Path.cwd()
+    base = repo_root or REPO_ROOT
     candidate = _resolve_under_repo(root, base)
     formal = _resolve_under_repo(Path("data/sessions"), base)
     if candidate == formal or formal in candidate.parents:
@@ -99,4 +110,5 @@ class Settings:
 
 def get_settings() -> Settings:
     """Return current application settings."""
+    load_environment()
     return Settings()
