@@ -496,6 +496,15 @@ start.bat
 >
 > Windows 运行时依赖：桌面窗口基于系统 **Edge WebView2**（Win11 通常已预装），并通过 `pythonnet` 加载（已在 `pyproject.toml` 中声明，`pip install -e .` 会一并安装）。
 
+**macOS / Linux**：使用等价的 `start.sh`（逻辑与 `start.bat` 一致）：
+
+```bash
+./start.sh
+```
+
+> macOS/Linux 说明：桌面窗口由 `pywebview` 使用系统原生 WebView 渲染（macOS 为 WebKit，经 `pyobjc` 加载，`pip install -e .` 会自动安装；`pythonnet` 仅在 Windows 安装）。
+> 若使用 `setup-token` 模式，自动启动仍只针对 `localhost:8317`；默认在 `~/cliproxyapi` 下查找 `cli-proxy-api` 可执行文件与 `config.yaml`，可用 `CLIPROXY_PATH` / `CLIPROXY_CONFIG` 覆盖，或自行先启动代理。也可改用 `LLM_MODE=api-key` 跳过代理检查。
+
 也可以在已激活环境后直接运行：
 
 ```bash

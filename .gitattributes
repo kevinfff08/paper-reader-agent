@@ -1,0 +1,4 @@
+# Shell scripts must use LF so they run on macOS/Linux (CRLF breaks the shebang).
+*.sh text eol=lf
+# Windows batch files stay CRLF.
+*.bat text eol=crlf
