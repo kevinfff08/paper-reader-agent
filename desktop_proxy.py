@@ -13,6 +13,31 @@ from urllib.request import Request, urlopen
 from backend.app.core.config import Settings
 
 
+def _default_proxy_dir() -> Path:
+    """Where a local CLIProxyAPI install is expected per platform."""
+    if os.name == "nt":
+        return Path(r"C:\cliproxyapi")
+    return Path.home() / "cliproxyapi"
+
+
+def _resolve_proxy_executable() -> tuple[Path, Path]:
+    """Resolve the proxy executable and config, honoring env overrides.
+
+    ``CLIPROXY_PATH`` / ``CLIPROXY_CONFIG`` point at a custom install; otherwise
+    a platform default is used (``C:\\cliproxyapi`` on Windows, ``~/cliproxyapi``
+    elsewhere), with a bare ``cli-proxy-api`` binary on macOS/Linux.
+    """
+    override = os.getenv("CLIPROXY_PATH")
+    if override:
+        executable = Path(override).expanduser()
+    else:
+        name = "cli-proxy-api.exe" if os.name == "nt" else "cli-proxy-api"
+        executable = _default_proxy_dir() / name
+    config_override = os.getenv("CLIPROXY_CONFIG")
+    config = Path(config_override).expanduser() if config_override else executable.with_name("config.yaml")
+    return executable, config
+
+
 def _proxy_ready(url: str, api_key: str | None) -> bool:
     base = url.rstrip("/")
     endpoint = base + ("/models" if base.endswith("/v1") else "/v1/models")
@@ -45,10 +70,12 @@ def ensure_proxy(settings: Settings, timeout: float = 15.0) -> None:
     address = urlsplit(url)
     if address.hostname not in {"localhost", "127.0.0.1"} or address.port != 8317:
         raise RuntimeError("Configured proxy is unavailable. Start that service and retry; automatic startup supports localhost:8317 only.")
-    executable = Path(r"C:\cliproxyapi\cli-proxy-api.exe")
-    config = executable.with_name("config.yaml")
+    executable, config = _resolve_proxy_executable()
     if not executable.is_file() or not config.is_file():
-        raise RuntimeError("Local proxy is unavailable; expected CLIProxyAPI and config.yaml in C:\\cliproxyapi.")
+        raise RuntimeError(
+            f"Local proxy is unavailable; expected the CLIProxyAPI executable and config.yaml at {executable.parent}. "
+            "Set CLIPROXY_PATH and CLIPROXY_CONFIG to point at your installation, or start the proxy yourself."
+        )
     process = subprocess.Popen(
         [str(executable), "--config", str(config)], cwd=executable.parent,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
